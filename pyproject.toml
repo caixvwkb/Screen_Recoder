@@ -1,0 +1,129 @@
+[project]
+name = "ScreenRecorder"
+version = "1.0.0"
+description = "多功能屏幕录制器，支持视频录制、散图录制和PDF输出"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "ScreenRecorder Team"}
+]
+keywords = ["screen", "recorder", "recording", "screenshot", "pdf", "video"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video :: Capture",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "PySide6>=6.5.0",
+    "mss>=9.0.0",
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    "Pillow>=10.0.0",
+    "reportlab>=4.0.0"
+]
+
+[tool.pyside6-project]
+files = ["mainwindow.py", "form.ui"]
+
+[tool.pyside6-deploy]
+# 基本配置
+main_file = "mainwindow.py"
+name = "ScreenRecorder"
+console = false          # 关闭控制台黑窗口（关键）
+mode = "standalone"      # 多文件模式（启动快，体积小）
+output_dir = "."       # 输出目录（当前目录）
+
+# 资源文件
+qml_files = []
+# 可选：添加应用图标
+icon = "screen.ico"
+
+# ====================== 核心：自动裁剪无用 Qt 库 ======================
+clean = true
+
+# 裁剪不需要的 Qt 插件
+drop_plugins = [
+    "3D",
+    "Bluetooth",
+    "Gamepad",
+    "Location",
+    "Multimedia",
+    "MultimediaWidgets",
+    "Network",
+    "Positioning",
+    "PrintSupport",
+    "Qml",
+    "Quick",
+    "QuickControls2",
+    "RemoteObjects",
+    "Scxml",
+    "Sensors",
+    "SerialBus",
+    "SerialPort",
+    "Sql",
+    "Svg",
+    "TextToSpeech",
+    "WebEngine",
+    "WebEngineCore",
+    "WebEngineWidgets",
+    "WebSockets",
+    "Xml",
+    "XmlPatterns"
+]
+
+# 裁剪不需要的 Qt 模块
+drop_modules = [
+    "PySide6.Qt3DCore",
+    "PySide6.Qt3DRender",
+    "PySide6.Qt3DInput",
+    "PySide6.Qt3DAnimation",
+    "PySide6.Qt3DExtras",
+    "PySide6.QtBluetooth",
+    "PySide6.QtMultimedia",
+    "PySide6.QtMultimediaWidgets",
+    "PySide6.QtNetwork",
+    "PySide6.QtPrintSupport",
+    "PySide6.QtQml",
+    "PySide6.QtQuick",
+    "PySide6.QtSql",
+    "PySide6.QtSvg",
+    "PySide6.QtSvgWidgets",
+    "PySide6.QtWebEngine",
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtWebEngineWidgets",
+    "PySide6.QtWebSockets",
+    "PySide6.QtXml",
+    "PySide6.QtXmlPatterns"
+]
+
+# ====================== 高级优化配置 ======================
+# Nuitka 特定选项
+nuitka_args = [
+    "--quiet",
+    "--noinclude-qt-translations",
+    "--follow-imports",
+    "--noinclude-pytest-mode",
+    "--noinclude-setuptools-mode",
+    "--noinclude-numba-mode",
+    "--noinclude-numpy-mode",
+    "--noinclude-scipy-mode",
+    "--noinclude-matplotlib-mode",
+    "--noinclude-torch-mode"
+]
+
+# 包含必要的模块（如果自动检测不到）
+include_modules = [
+    "mss",
+    "cv2",
+    "numpy",
+    "PIL",
+    "reportlab"
+]

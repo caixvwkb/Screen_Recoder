@@ -1,0 +1,22 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Python files
+*.py text diff=python
+
+# Markdown files
+*.md text diff=markdown
+
+# UI files
+*.ui text
+
+# Image files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.bmp binary
+*.ico binary
+
+# Executables
+*.exe binary
+*.dll binary
