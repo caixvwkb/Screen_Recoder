@@ -196,3 +196,16 @@ pysidedeploy.spec
 ScreenRecorder.spec
 需求和开发记录文档.md
 需求文档.md
+
+# ===== ScreenRecorder 运行/打包产物（2026-09-09） =====
+# Nuitka / pyside6-deploy 输出
+output/
+deployment/
+*.dist
+# 运行缓存与录制产物
+cache/
+Recordings/
+# 外置模型（约 314MB，单独备份分发，不入库；如要提交删掉 models/ 一行）
+models/
+# 运行生成的个人配置（快捷键等，随机器不同）
+settings.json

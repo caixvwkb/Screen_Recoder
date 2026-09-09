@@ -24,13 +24,12 @@
        <bool>false</bool>
       </property>
       <widget class="QWidget" name="videoTab">
+       <attribute name="icon">
+        <iconset>
+         <normaloff>.</normaloff>.</iconset>
+       </attribute>
        <attribute name="title">
         <string>视频录制</string>
-       </attribute>
-       <attribute name="icon">
-        <iconset resource="">
-         <normaloff/>
-        </iconset>
        </attribute>
        <layout class="QVBoxLayout" name="verticalLayout_5">
         <item>
@@ -180,27 +179,27 @@
           <layout class="QVBoxLayout" name="verticalLayout_4">
            <item>
             <layout class="QHBoxLayout" name="horizontalLayout_6">
-                <item>
-                 <widget class="QPushButton" name="startBtn">
-                  <property name="text">
-                   <string>开始录制 (Ctrl+P)</string>
-                  </property>
-                  <property name="enabled">
-                   <bool>true</bool>
-                  </property>
-                 </widget>
-                </item>
-                <item>
-                 <widget class="QPushButton" name="stopBtn">
-                  <property name="text">
-                   <string>停止录制 (Ctrl+B)</string>
-                  </property>
-                  <property name="enabled">
-                   <bool>false</bool>
-                  </property>
-                 </widget>
-                </item>
-               </layout>
+             <item>
+              <widget class="QPushButton" name="startBtn">
+               <property name="enabled">
+                <bool>true</bool>
+               </property>
+               <property name="text">
+                <string>开始录制 (Ctrl+P)</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="stopBtn">
+               <property name="enabled">
+                <bool>false</bool>
+               </property>
+               <property name="text">
+                <string>停止录制 (Ctrl+B)</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
            </item>
            <item>
             <layout class="QHBoxLayout" name="horizontalLayout_7">
@@ -214,7 +213,7 @@
              <item>
               <spacer name="horizontalSpacer">
                <property name="orientation">
-                <enum>Qt::Horizontal</enum>
+                <enum>Qt::Orientation::Horizontal</enum>
                </property>
                <property name="sizeHint" stdset="0">
                 <size>
@@ -375,11 +374,11 @@
                 </item>
                 <item>
                  <widget class="QPushButton" name="manualStopBtn">
-                  <property name="text">
-                   <string>结束</string>
-                  </property>
                   <property name="enabled">
                    <bool>false</bool>
+                  </property>
+                  <property name="text">
+                   <string>结束</string>
                   </property>
                  </widget>
                 </item>
@@ -412,11 +411,11 @@
                 </item>
                 <item>
                  <widget class="QPushButton" name="autoStopBtn">
-                  <property name="text">
-                   <string>停止录制 (Ctrl+B)</string>
-                  </property>
                   <property name="enabled">
                    <bool>false</bool>
+                  </property>
+                  <property name="text">
+                   <string>停止录制 (Ctrl+B)</string>
                   </property>
                  </widget>
                 </item>
@@ -433,17 +432,17 @@
                 </item>
                 <item>
                  <widget class="QDoubleSpinBox" name="frameIntervalSpinBox">
-                  <property name="value">
-                   <number>1</number>
-                  </property>
                   <property name="minimum">
-                   <number>0.1</number>
+                   <double>0.000000000000000</double>
                   </property>
                   <property name="maximum">
-                   <number>100</number>
+                   <double>100.000000000000000</double>
                   </property>
                   <property name="singleStep">
-                   <number>5</number>
+                   <double>5.000000000000000</double>
+                  </property>
+                  <property name="value">
+                   <double>1.000000000000000</double>
                   </property>
                  </widget>
                 </item>
@@ -578,11 +577,11 @@
                 </item>
                 <item>
                  <widget class="QPushButton" name="pdfManualStopBtn">
-                  <property name="text">
-                   <string>结束</string>
-                  </property>
                   <property name="enabled">
                    <bool>false</bool>
+                  </property>
+                  <property name="text">
+                   <string>结束</string>
                   </property>
                  </widget>
                 </item>
@@ -615,11 +614,11 @@
                 </item>
                 <item>
                  <widget class="QPushButton" name="pdfAutoStopBtn">
-                  <property name="text">
-                   <string>停止录制 (Ctrl+B)</string>
-                  </property>
                   <property name="enabled">
                    <bool>false</bool>
+                  </property>
+                  <property name="text">
+                   <string>停止录制 (Ctrl+B)</string>
                   </property>
                  </widget>
                 </item>
@@ -636,17 +635,17 @@
                 </item>
                 <item>
                  <widget class="QDoubleSpinBox" name="pdfFrameIntervalSpinBox">
-                  <property name="value">
-                   <number>1</number>
-                  </property>
                   <property name="minimum">
-                   <number>0.1</number>
+                   <double>0.000000000000000</double>
                   </property>
                   <property name="maximum">
-                   <number>100</number>
+                   <double>100.000000000000000</double>
                   </property>
                   <property name="singleStep">
-                   <number>5</number>
+                   <double>5.000000000000000</double>
+                  </property>
+                  <property name="value">
+                   <double>1.000000000000000</double>
                   </property>
                  </widget>
                 </item>
@@ -677,7 +676,7 @@
      <x>0</x>
      <y>0</y>
      <width>480</width>
-     <height>22</height>
+     <height>17</height>
     </rect>
    </property>
    <widget class="QMenu" name="menu_File">
@@ -709,11 +708,11 @@
    </property>
   </action>
   <action name="actionAlwaysOnTop">
-   <property name="text">
-    <string>保持置顶</string>
-   </property>
    <property name="checkable">
     <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>保持置顶</string>
    </property>
   </action>
   <action name="actionSelectRegion">
@@ -725,4 +724,6 @@
    </property>
   </action>
  </widget>
+ <resources/>
+ <connections/>
 </ui>

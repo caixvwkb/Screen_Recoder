@@ -1,12 +1,12 @@
 [project]
 name = "ScreenRecorder"
-version = "1.0.0"
+version = "2.2.0"
 description = "多功能屏幕录制器，支持视频录制、散图录制和PDF输出"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
-    {name = "ScreenRecorder Team"}
+    {name = "Caixvwkb"}
 ]
 keywords = ["screen", "recorder", "recording", "screenshot", "pdf", "video"]
 classifiers = [
@@ -27,15 +27,49 @@ dependencies = [
     "opencv-python>=4.8.0",
     "numpy>=1.24.0",
     "Pillow>=10.0.0",
-    "reportlab>=4.0.0"
+    "reportlab>=4.0.0",
+    "rapidocr-onnxruntime>=1.4.0",
+    # PyMuPDF 锁定 1.22 系列（classic 实现，小型 _fitz.pyd）：
+    # 1.23+ 改用 rebased（巨型 mupdf.py wrapper），Nuitka 编译会 PASS1 极慢/堆内存耗尽
+    "PyMuPDF>=1.22,<1.23"
 ]
 
 [tool.pyside6-project]
-files = ["mainwindow.py", "form.ui"]
+# Qt Creator 6.x Python 项目文件列表（项目树/运行入口由此决定）
+# 第一项 = 默认主脚本；旧版入口与 UI 已归档到 legacy/ 仅供参考
+files = [
+    "mainwindow_fluent.py",
+    "ui/widgets.py",
+    "ui/pages/video_page.py",
+    "ui/pages/image_page.py",
+    "ui/pages/pdf_page.py",
+    "ui/pages/ocr_page.py",
+    "ui/pages/asr_page.py",
+    "asr.py",
+    "ocr.py",
+    "folder_ocr.py",
+    "export_worker.py",
+    "capture.py",
+    "audio_capture.py",
+    "audio_sessions.py",
+    "region_selector.py",
+    "global_hotkey.py",
+    "shortcut_manager.py",
+    "settings_manager.py",
+    "paths.py",
+    "tracelog.py",
+    "sound_feedback.py",
+    "legacy/mainwindow.py",
+    "legacy/ui_form.py",
+    "legacy/form.ui",
+    "docs/01-PRD（产品需求文档）.md",
+    "docs/02-打包发布指南.md",
+    "docs/03-Bug记录.md",
+]
 
 [tool.pyside6-deploy]
 # 基本配置
-main_file = "mainwindow.py"
+main_file = "mainwindow_fluent.py"
 name = "ScreenRecorder"
 console = false          # 关闭控制台黑窗口（关键）
 mode = "standalone"      # 多文件模式（启动快，体积小）
@@ -110,6 +144,8 @@ nuitka_args = [
     "--quiet",
     "--noinclude-qt-translations",
     "--follow-imports",
+    "--nofollow-import-to=torch",
+    "--nofollow-import-to=sympy",
     "--noinclude-pytest-mode",
     "--noinclude-setuptools-mode",
     "--noinclude-numba-mode",
@@ -125,5 +161,12 @@ include_modules = [
     "cv2",
     "numpy",
     "PIL",
-    "reportlab"
+    "reportlab",
+    "rapidocr_onnxruntime",
+    "fitz",   # PyMuPDF 1.22 classic 模块名
+    "soundcard",
+    "lameenc",
+    "soundfile",
+    "imageio_ffmpeg",
+    "comtypes"
 ]

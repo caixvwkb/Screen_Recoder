@@ -4,3 +4,5 @@ opencv-python>=4.8.0
 numpy>=1.24.0
 Pillow>=10.0.0
 reportlab>=4.0.0
+# OCR（AI 友好输出：识别截图文字，未安装时自动降级不识别）
+rapidocr-onnxruntime>=1.4.0

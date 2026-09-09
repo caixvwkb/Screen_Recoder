@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (QApplication, QComboBox, QDoubleSpinBox, QGroupBo
     QMenu, QMenuBar, QPushButton, QSizePolicy,
     QSpacerItem, QSpinBox, QStatusBar, QTabWidget,
     QVBoxLayout, QWidget)
+
 class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         if not MainWindow.objectName():
@@ -192,7 +193,7 @@ class Ui_MainWindow(object):
         self.verticalLayout_5.addWidget(self.controlGroupBox)
 
         icon = QIcon()
-        icon.addFile(u"", QSize(), QIcon.Mode.Normal, QIcon.State.Off)
+        icon.addFile(u".", QSize(), QIcon.Mode.Normal, QIcon.State.Off)
         self.modeTabWidget.addTab(self.videoTab, icon, "")
         self.imageTab = QWidget()
         self.imageTab.setObjectName(u"imageTab")
@@ -341,10 +342,10 @@ class Ui_MainWindow(object):
 
         self.frameIntervalSpinBox = QDoubleSpinBox(self.autoGroupBox)
         self.frameIntervalSpinBox.setObjectName(u"frameIntervalSpinBox")
-        self.frameIntervalSpinBox.setValue(1)
-        self.frameIntervalSpinBox.setMinimum(0)
-        self.frameIntervalSpinBox.setMaximum(100)
-        self.frameIntervalSpinBox.setSingleStep(5)
+        self.frameIntervalSpinBox.setMinimum(0.000000000000000)
+        self.frameIntervalSpinBox.setMaximum(100.000000000000000)
+        self.frameIntervalSpinBox.setSingleStep(5.000000000000000)
+        self.frameIntervalSpinBox.setValue(1.000000000000000)
 
         self.horizontalLayout_13.addWidget(self.frameIntervalSpinBox)
 
@@ -497,10 +498,10 @@ class Ui_MainWindow(object):
 
         self.pdfFrameIntervalSpinBox = QDoubleSpinBox(self.pdfAutoGroupBox)
         self.pdfFrameIntervalSpinBox.setObjectName(u"pdfFrameIntervalSpinBox")
-        self.pdfFrameIntervalSpinBox.setValue(1)
-        self.pdfFrameIntervalSpinBox.setMinimum(0)
-        self.pdfFrameIntervalSpinBox.setMaximum(100)
-        self.pdfFrameIntervalSpinBox.setSingleStep(5)
+        self.pdfFrameIntervalSpinBox.setMinimum(0.000000000000000)
+        self.pdfFrameIntervalSpinBox.setMaximum(100.000000000000000)
+        self.pdfFrameIntervalSpinBox.setSingleStep(5.000000000000000)
+        self.pdfFrameIntervalSpinBox.setValue(1.000000000000000)
 
         self.horizontalLayout_18.addWidget(self.pdfFrameIntervalSpinBox)
 
@@ -525,7 +526,7 @@ class Ui_MainWindow(object):
         MainWindow.setCentralWidget(self.centralwidget)
         self.menubar = QMenuBar(MainWindow)
         self.menubar.setObjectName(u"menubar")
-        self.menubar.setGeometry(QRect(0, 0, 480, 22))
+        self.menubar.setGeometry(QRect(0, 0, 480, 17))
         self.menu_File = QMenu(self.menubar)
         self.menu_File.setObjectName(u"menu_File")
         self.menu_Options = QMenu(self.menubar)
