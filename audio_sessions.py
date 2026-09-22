@@ -346,8 +346,10 @@ def list_active_sessions(max_per_device: int = 64, _debug: bool = False) -> list
                         disp = ctl.GetDisplayName()
                         disp_str = ""
                         if disp:
+                            # comtypes 对 COM out 字符串参数自动管理释放，
+                            # 不可再手动 CoTaskMemFree（双重释放→堆损坏 0xc0000374，
+                            # 启动期音频枚举即崩，曾致远控场景下程序无声退出）
                             disp_str = disp
-                            _free_string(disp)
                         results.append({
                             "pid": int(pid),
                             "process_name": _process_name(pid),

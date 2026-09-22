@@ -515,13 +515,6 @@ class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
         if name not in self._page_built and name in self._page_builders:
             self._build_page(name)
 
-    def _build_settings_page(self):
-        self._about_btn.clicked.connect(self._show_about_dialog)
-        self.navigationInterface.addWidget(
-            "aboutButton", self._about_btn, self._show_about_dialog,
-            NavigationItemPosition.BOTTOM,
-        )
-
     # ---------------- 视频录制页 ----------------
 
     def _apply_spin_qss(self):
@@ -774,6 +767,12 @@ QProgressBar::chunk {{
             self._show_tip("没有可恢复的页面", "右键导航栏空白处可添加新页面")
 
     def _build_settings_page(self):
+        # 底部：关于软件按钮——挂载到导航栏底部（懒构建改造时误删过，恢复点）
+        self._about_btn.clicked.connect(self._show_about_dialog)
+        self.navigationInterface.addWidget(
+            "aboutButton", self._about_btn, self._show_about_dialog,
+            NavigationItemPosition.BOTTOM,
+        )
         self.settings_page = SettingsPage(self.app_data_dir, self.output_dir, self)
         self.addSubInterface(self.settings_page, FluentIcon.SETTING, "设置",
                              position=NavigationItemPosition.BOTTOM)
