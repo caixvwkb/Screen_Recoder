@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ScreenRecorder UI 重构版（2.3.13）：基于 PySide6-Fluent-Widgets 的 Fluent 风格界面。
+"""ScreenRecorder UI 重构版（2.4.0）：基于 PySide6-Fluent-Widgets 的 Fluent 风格界面。
 
 重构原则（见 需求和开发记录文档.md · UI 重构选型）：
 - 功能逻辑不动：ocr.py / asr.py / export_worker.py / capture.py / folder_ocr.py 全保留，
@@ -352,11 +352,11 @@ class SettingsPage(QWidget):
 
 class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
                  OcrPageMixin, AsrPageMixin, FluentWindow):
-    """ScreenRecorder 2.3.13 主窗口（Fluent 风格）。"""
+    """ScreenRecorder 2.4.0 主窗口（Fluent 风格）。"""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ScreenRecorder 2.3.13")
+        self.setWindowTitle("ScreenRecorder 2.4.0")
         # 录屏软件窗口不宜过大（避免录制时遮挡画面）：默认约 720×640
         self.resize(720, 640)
         self.setMinimumSize(600, 480)
@@ -409,6 +409,31 @@ class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
         self.navigationInterface.panel.installEventFilter(self)
         # 首帧布局完全激活后再同步一次折叠块展开高度（showEvent 时可能仍有卡未布局）
         QTimer.singleShot(80, self._sync_all_expand_heights)
+        # 启动空闲期后台预热 OCR 引擎池：把"首次点识别的等待"前移到启动后台，
+        # 预热失败只记日志、不影响启动（懒构建页面先跑，预热延时错开）
+        QTimer.singleShot(2500, self._prewarm_ocr)
+
+    def _prewarm_ocr(self):
+        """后台预热 OCR 引擎池（常驻，首次识别秒开）。
+
+        放到独立后台线程执行：get_ocr_pool 会等全部引擎加载完才返回，
+        高并发数下加载耗时数秒，放 UI 线程会短暂冻结界面。
+        """
+        import threading
+
+        def _run():
+            try:
+                from ocr import get_ocr_pool
+                settings = self.settings_manager.load() if hasattr(self, "settings_manager") else {}
+                workers = int(settings.get("ocr_concurrency", 0)) or min(4, max(1, (os.cpu_count() or 4) // 2))
+                workers = max(1, min(8, workers))
+                get_ocr_pool(workers)
+                tracelog.info(f"[OCR] 后台预热完成：{workers} 个引擎常驻")
+            except Exception as e:
+                tracelog.error(f"[OCR] 后台预热失败（不影响使用，首次识别时再加载）: {e}")
+
+        threading.Thread(target=_run, daemon=True).start()
+
 
     def _migrate_legacy_settings(self):
         """旧版（%AppData%/python/ScreenRecorder/settings.json）配置一次性迁移。
@@ -1227,7 +1252,7 @@ QProgressBar::chunk {{
         head.addWidget(icon)
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
-        title = BodyLabel("ScreenRecorder 2.3.13", dlg)
+        title = BodyLabel("ScreenRecorder 2.4.0", dlg)
         title.setStyleSheet("font-size: 18px; font-weight: 600;")
         title_box.addWidget(title)
         sub = CaptionLabel("屏幕录制 · 截图 · OCR/ASR 文字识别", dlg)
@@ -1239,7 +1264,7 @@ QProgressBar::chunk {{
 
         # 信息行
         info = [
-            ("版本", "2.3.13（启动优化与稳定性）"),
+            ("版本", "2.4.0（ASR 架构重构）"),
             ("作者", "Caixvwkb"),
             ("技术栈", "Python 3.11 · PySide6 · PySide6-Fluent-Widgets"),
             ("打包", "Nuitka（standalone / onefile）"),

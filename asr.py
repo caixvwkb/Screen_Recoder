@@ -501,116 +501,108 @@ def is_transcribed(audio_file: str, out_dir: str = None) -> bool:
 def transcribe_parallel_segments(files, max_workers: int = 4, model_dir: str = "",
                                  on_file_done=None, on_segment_done=None,
                                  cancel_event=None) -> dict:
-    """段级并行转写：文件 × 分段拍平成独立识别任务，统一线程池并行。
+    """文件级串行（开火车）+ 文件内段级并行转写。
 
-    - **两阶段**：全部文件先并行解码，解码全部就绪后才提交识别任务；
-    - **交错提交**：按文件轮换提交段任务（f1s1, f2s1, f3s1, f1s2, …），
-      多个文件的段同时进池、均匀推进，避免单个文件独占线程池；
-    - **按文件即时完成**：某个文件的全部段完成 → 立即聚合并回调
-      on_file_done（写文件/进度/提示按文件为单位，不等待全部文件）；
-      中途失败只影响失败文件，已完成文件照常输出。
+    - **一次只解码一个文件**：内存只驻留当前文件音频，多文件不会同时
+      打开/转码（修复大批量时多个 ffmpeg 子进程并发 → 系统 dll/内存耗尽报错）；
+    - **当前文件的全部段并行识别**：用满 max_workers，段任务共享同一份
+      samples（numpy 切片视图不复制），单文件 3 万段也只需一份音频内存；
+    - **完成一个文件立即聚合输出、释放内存，再处理下一个**（开火车，
+      文件间不交错）；中途失败只影响失败文件，已完成文件照常输出；
+    - **线程池贯穿全部文件**：模型实例按线程只加载一次（sherpa 加载
+      开销大，避免每个文件重新加载）。
 
-    返回 {文件路径: 转写文本}（解码失败/空音频 → 空串，不触发 on_file_done）。
-    on_file_done(f, text)：每完成一个文件立即回调一次（文件进度/输出用）。
-    on_segment_done(f, seg_done, seg_total)：每完成一段回调一次
-    （seg_done/seg_total 为全局累计，一直自增）。
-    cancel_event：threading.Event；置位时停止提交新段并取消未开始的段，
+    回调语义（与旧版兼容）：
+    - on_segment_done(f, seg_done, seg_total)：seg_done 为跨文件全局自增段数；
+      seg_total 为截至当前文件的累计段数（处理过程中递增，非常量）；
+    - on_file_done(f, text)：每完成一个文件立即回调一次（文件进度/输出用）。
+    cancel_event：threading.Event；置位时停止提交新段/新文件并取消未开始的段，
     已完成的文件照常触发 on_file_done（打断后已识别内容不丢）。
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed, CancelledError
     results = {f: "" for f in files}
     if not files or max_workers < 1:
         return results
+
+    def recognize_seg(samples, start, end):
+        rec = get_recognizer(model_dir)  # 每线程独立实例，线程池复用 → 每线程只加载一次
+        if rec is None:
+            return "", []
+        punc = get_punctuator(model_dir)
+        try:
+            return _transcribe_one(rec, samples[start:end], start / SAMPLE_RATE,
+                                   (end - start) / SAMPLE_RATE, punc)
+        except Exception as e:
+            tracelog.error(f"[ASR] 分段识别失败: {e}")
+            return "", []
+
     try:
+        # 线程池贯穿所有文件：线程与模型实例复用，避免每文件重新加载模型
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            # ① 解码全部文件（并行；m4a/视频走 ffmpeg 转码也摊平），全部就绪后再切段
-            load_futs = {pool.submit(_load_samples, f): f for f in files}
-            loaded = {}
-            for fut in as_completed(load_futs):
-                f = load_futs[fut]
+            g_done = [0]        # 全局已完成段数（跨文件自增）
+            done_segs_sum = 0   # 已完整处理完的文件的段数之和
+            for f in files:
+                if cancel_event and cancel_event.is_set():
+                    break
+                # ① 串行解码当前文件（同时只有一个 ffmpeg 转码，控制内存与句柄）
                 try:
-                    loaded[f] = fut.result()
+                    data = _load_samples(f)
                 except Exception as e:
                     tracelog.error(f"[ASR] 解码失败 {os.path.basename(f)}: {e}")
-                    loaded[f] = None
-
-            # 每个文件的可识别段列表（解码成功且非空才参与）
-            file_ranges = {}
-            for f in files:
-                data = loaded.get(f)
+                    data = None
                 if not data:
+                    results[f] = ""
                     continue
                 samples, via = data
                 if len(samples) == 0:
+                    results[f] = ""
                     continue
-                file_ranges[f] = _segment_ranges(len(samples))
-            seg_total = {f: len(r) for f, r in file_ranges.items()}
-            g_total = sum(seg_total.values()) or 1
+                ranges = _segment_ranges(len(samples))
+                seg_total_file = len(ranges)
 
-            def recognize_seg(samples, start, end):
-                rec = get_recognizer(model_dir)  # 每线程独立实例，非线程安全
-                if rec is None:
-                    return "", []
-                punc = get_punctuator(model_dir)
-                try:
-                    return _transcribe_one(rec, samples[start:end], start / SAMPLE_RATE,
-                                           (end - start) / SAMPLE_RATE, punc)
-                except Exception as e:
-                    tracelog.error(f"[ASR] 分段识别失败: {e}")
-                    return "", []
-
-            # ② 按文件轮换交错提交段任务（多文件均匀进池，避免独占）
-            seg_futs = {}
-            if file_ranges:
-                max_segs = max(len(r) for r in file_ranges.values())
-                for i in range(max_segs):
+                # ② 当前文件全部段并行识别
+                seg_futs = {}
+                for start, end in ranges:
                     if cancel_event and cancel_event.is_set():
                         break
-                    for f in files:
-                        r = file_ranges.get(f)
-                        if r and i < len(r):
-                            start, end = r[i]
-                            fut = pool.submit(recognize_seg, loaded[f][0], start, end)
-                            seg_futs[fut] = (f, start)
-
-            # ③ 段完成：全局累计计数 + 回调；某文件全部段完成 → 立即聚合输出
-            seg_done = {}
-            g_done = [0]
-            file_sents = {}
-            for fut in as_completed(seg_futs):
-                if cancel_event and cancel_event.is_set():
-                    for f2 in list(seg_futs):
-                        if not f2.done():
-                            f2.cancel()
-                    break
-                f, start = seg_futs[fut]
-                try:
-                    t, sents = fut.result()
-                except CancelledError:
-                    break
-                except Exception:
-                    t, sents = "", []
-                if sents:
-                    file_sents.setdefault(f, []).extend(sents)
-                n_done = seg_done.get(f, 0) + 1
-                seg_done[f] = n_done
-                g_done[0] += 1
-                # 段落级进度日志（乱序为完成顺序；等待长音频时可感知在推进）
-                tracelog.info(f"[ASR] 段 {g_done[0]}/{g_total}（{os.path.basename(f)} "
-                              f"{n_done}/{seg_total.get(f, 1)}）")
-                if on_segment_done:
+                    fut = pool.submit(recognize_seg, samples, start, end)
+                    seg_futs[fut] = start
+                seg_done = [0]
+                file_sents = []
+                for fut in as_completed(seg_futs):
+                    if cancel_event and cancel_event.is_set():
+                        for f2 in list(seg_futs):
+                            if not f2.done():
+                                f2.cancel()
+                        break
                     try:
-                        on_segment_done(f, g_done[0], g_total)
+                        t, sents = fut.result()
+                    except CancelledError:
+                        break
                     except Exception:
-                        pass
-                # 该文件全部段完成 → 立即聚合、回调（写文件/进度/提示按文件为单位）
-                if n_done == seg_total.get(f) and f in file_ranges:
-                    results[f] = _merge_file_sents(file_sents.get(f, []))
+                        t, sents = "", []
+                    if sents:
+                        file_sents.extend(sents)
+                    seg_done[0] += 1
+                    g_done[0] += 1
+                    # 段落级进度日志（全局自增；总数为 已完成文件段和 + 当前文件段数）
+                    tracelog.info(f"[ASR] 段 {g_done[0]}/{done_segs_sum + seg_total_file} "
+                                  f"（{os.path.basename(f)} {seg_done[0]}/{seg_total_file}）")
+                    if on_segment_done:
+                        try:
+                            on_segment_done(f, g_done[0], done_segs_sum + seg_total_file)
+                        except Exception:
+                            pass
+                # ③ 当前文件全部段结束（含取消中断）→ 聚合输出，释放内存
+                if seg_done[0] >= seg_total_file:
+                    results[f] = _merge_file_sents(file_sents)
                     if on_file_done:
                         try:
                             on_file_done(f, results[f])
                         except Exception:
                             pass
+                done_segs_sum += seg_total_file
+                del samples, data  # 释放当前文件音频，进入下一个文件
     except Exception as e:
         tracelog.error(f"[ASR] 批量转写出错: {e}")
     return results

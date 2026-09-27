@@ -14,10 +14,10 @@ class ShortcutManager:
     """快捷键数据管理：默认值、加载、保存、冲突校验。"""
 
     DEFAULT_SHORTCUTS = {
-        "select_region": "Ctrl+A",     # 选择录制区域
-        "start_recording": "Ctrl+S",   # 开始录制
-        "stop_recording": "Ctrl+P",    # 停止录制
-        "capture_image": "Return",     # 手动截取图片
+        "select_region": "Ctrl+Alt+1", # 选择录制区域
+        "start_recording": "Ctrl+Alt+2",# 开始录制
+        "stop_recording": "Ctrl+Alt+3", # 停止录制
+        "capture_image": "Return",       # 手动截取图片
     }
 
     def __init__(self, settings_file: str):
