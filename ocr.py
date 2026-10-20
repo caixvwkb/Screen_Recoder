@@ -129,6 +129,52 @@ def resolve_model_dir(explicit_dir: str = "") -> str:
     return None
 
 
+def _ocr_providers():
+    """推理后端：有 CUDA EP 就优先 GPU（失败回退 CPU）；纯 CPU 环境返回 None（不传，保持现状）。"""
+    try:
+        import onnxruntime as ort
+        if "CUDAExecutionProvider" in ort.get_available_providers():
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    except Exception:
+        pass
+    return None
+
+
+def list_ocr_models(root_dir: str = "") -> list:
+    """扫描 OCR 模型根目录，返回可用模型列表。
+
+    每个可用模型 = 一个子目录（含 config.json 且 det/rec/cls 完整）；
+    根目录本身也算一个（兼容旧扁平结构）。返回 [{name, path, label}]。
+    """
+    root = (root_dir or "").strip()
+    if not root:
+        root = resolve_model_dir("")
+    if not root or not os.path.isdir(root):
+        return []
+
+    items = []
+    if models_complete(root):
+        cfg = _load_ocr_config(root)
+        items.append({
+            "name": _cfg_name(cfg),
+            "path": root,
+            "label": "",
+        })
+    for sub in sorted(os.listdir(root)):
+        d = os.path.join(root, sub)
+        if not os.path.isdir(d):
+            continue
+        if not models_complete(d):
+            continue
+        cfg = _load_ocr_config(d)
+        items.append({
+            "name": _cfg_name(cfg),
+            "path": d,
+            "label": sub,
+        })
+    return items
+
+
 def get_ocr_engine(model_dir: str = ""):
     """返回当前线程的 OCR 引擎（懒加载，每线程一个实例）。
 
@@ -157,21 +203,28 @@ def get_ocr_engine(model_dir: str = ""):
             cfg = _load_ocr_config(resolved)
             files = _cfg_model_files(cfg)
             name = _cfg_name(cfg)
+            _prov = _ocr_providers()
+            _kw = {} if _prov is None else {"providers": _prov}
             _engine_local.engine = RapidOCR(
                 det_model_path=os.path.join(resolved, files[0]),
                 rec_model_path=os.path.join(resolved, files[1]),
                 cls_model_path=os.path.join(resolved, files[2]),
-                intra_op_num_threads=1)
+                intra_op_num_threads=1, **_kw)
             _log_engine_source(
                 f"[OCR] OCR 引擎加载成功：本地外置模型 {os.path.normpath(resolved)}（{name}）\n"
                 f"      模型: {files[0]} / {files[1]} / {files[2]}\n"
+                f"      推理: {'GPU（CUDA）' if _prov else 'CPU'}\n"
                 f"      配置来源: {_cfg_source_label(resolved)}")
         else:  # 回退包内默认模型（rapidocr 自带 models/）
+            _prov = _ocr_providers()
+            _kw = {} if _prov is None else {"providers": _prov}
             try:
-                _engine_local.engine = RapidOCR(intra_op_num_threads=1)
+                _engine_local.engine = RapidOCR(intra_op_num_threads=1, **_kw)
             except TypeError:
-                _engine_local.engine = RapidOCR()
-            _log_engine_source("[OCR] OCR 引擎加载成功：rapidocr 包内默认模型（未找到外置模型目录）")
+                _engine_local.engine = RapidOCR(**_kw)
+            _log_engine_source(
+                f"[OCR] OCR 引擎加载成功：rapidocr 包内默认模型（未找到外置模型目录）"
+                f"（推理: {'GPU（CUDA）' if _prov else 'CPU'}）")
         _engine_local.engine_key = key
     except Exception as e:
         tracelog.error(f"[OCR] 引擎加载失败，OCR 功能禁用: {e}")

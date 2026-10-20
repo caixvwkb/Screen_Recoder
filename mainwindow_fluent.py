@@ -155,6 +155,12 @@ def _enable_content_two_line(card) -> None:
 class SettingsPage(QWidget):
     """设置页：外观 / 通用 / 全局快捷键 / 存储与目录（对照旧版全局设置迁移）。"""
 
+    model_selection_changed = Signal()   # 模型下拉切换 → MainWindow 保存设置
+
+    def _on_model_combo_changed(self, *args):
+        """模型下拉变化（填充时已 blockSignals，不会误触发）。"""
+        self.model_selection_changed.emit()
+
     def __init__(self, app_data_dir: str, output_dir: str, parent=None):
         super().__init__(parent)
         self.setObjectName("page_设置")
@@ -265,18 +271,67 @@ class SettingsPage(QWidget):
         self.ocr_model_card = DirPickerCard(
             FluentIcon.SEARCH, "OCR 模型路径", "自动探测（默认）", model_group)
         model_group.addSettingCard(self.ocr_model_card)
+
+        # OCR 模型选择（CPU / GPU 各一行；下拉 = 扫描模型根目录下的模型）
+        self.ocr_cpu_model_combo = ComboBox(self)
+        self.ocr_cpu_model_combo.setMinimumWidth(190)
+        self.ocr_cpu_model_combo.currentIndexChanged.connect(self._on_model_combo_changed)
+        self.ocr_cpu_model_card = SettingCard(
+            FluentIcon.FOLDER, "OCR 模型（CPU）",
+            "选择 OCR 识别用模型（下拉列出路径目录内的模型，切换后重启生效）",
+            model_group)
+        self.ocr_cpu_model_card.hBoxLayout.addWidget(self.ocr_cpu_model_combo, 0, Qt.AlignRight)
+        self.ocr_cpu_model_card.hBoxLayout.addSpacing(12)
+        model_group.addSettingCard(self.ocr_cpu_model_card)
+
+        self.ocr_gpu_model_combo = ComboBox(self)
+        self.ocr_gpu_model_combo.setMinimumWidth(190)
+        # 当前为纯 CPU onnxruntime，GPU 行不可用；但模型可先选好（装上 CUDA 版后自动启用）
+        self.ocr_gpu_model_combo.currentIndexChanged.connect(self._on_model_combo_changed)
+        self.ocr_gpu_model_card = SettingCard(
+            FluentIcon.CAMERA, "OCR 模型（GPU）",
+            "GPU 推理需 CUDA 版 onnxruntime（当前为 CPU 版，不可用）；模型可先选好，装上后自动启用",
+            model_group)
+        self.ocr_gpu_model_card.hBoxLayout.addWidget(self.ocr_gpu_model_combo, 0, Qt.AlignRight)
+        self.ocr_gpu_model_card.hBoxLayout.addSpacing(12)
+        model_group.addSettingCard(self.ocr_gpu_model_card)
+
         self.asr_model_dir = ""
         self.asr_model_card = DirPickerCard(
             FluentIcon.MICROPHONE, "ASR 模型路径", "自动探测（默认）", model_group)
         model_group.addSettingCard(self.asr_model_card)
+
+        # ASR 模型选择（CPU / GPU 各一行）
+        self.asr_cpu_model_combo = ComboBox(self)
+        self.asr_cpu_model_combo.setMinimumWidth(190)
+        self.asr_cpu_model_combo.currentIndexChanged.connect(self._on_model_combo_changed)
+        self.asr_cpu_model_card = SettingCard(
+            FluentIcon.INFO, "ASR 模型（CPU）",
+            "选择 CPU 转写用模型（下拉列出路径目录内的模型，切换后重启生效）",
+            model_group)
+        self.asr_cpu_model_card.hBoxLayout.addWidget(self.asr_cpu_model_combo, 0, Qt.AlignRight)
+        self.asr_cpu_model_card.hBoxLayout.addSpacing(12)
+        model_group.addSettingCard(self.asr_cpu_model_card)
+
+        self.asr_gpu_model_combo = ComboBox(self)
+        self.asr_gpu_model_combo.setMinimumWidth(190)
+        self.asr_gpu_model_combo.currentIndexChanged.connect(self._on_model_combo_changed)
+        self.asr_gpu_model_card = SettingCard(
+            FluentIcon.VOLUME, "ASR 模型（GPU）",
+            "选择 GPU 转写用模型（可与 CPU 用不同模型，切换后重启生效）",
+            model_group)
+        self.asr_gpu_model_card.hBoxLayout.addWidget(self.asr_gpu_model_combo, 0, Qt.AlignRight)
+        self.asr_gpu_model_card.hBoxLayout.addSpacing(12)
+        model_group.addSettingCard(self.asr_gpu_model_card)
+
         self.reset_model_card = PushSettingCard(
             "恢复自动探测", FluentIcon.SYNC, "模型自动探测",
             "清空 OCR / ASR 自定义路径，恢复默认探测程序旁的 models/ocr、models/asr",
             model_group)
         model_group.addSettingCard(self.reset_model_card)
         model_hint = CaptionLabel(
-            "留空 = 自动探测程序旁的 models/ocr、models/asr 目录；"
-            "模型不打包进 exe，随程序文件夹分发。", model_group)
+            "留空 = 自动探测程序旁的 models/ocr、models/asr 目录；模型不打包进 exe，随程序文件夹分发。\n"
+            "模型切换保存后需重启软件生效（识别引擎按线程缓存，不支持热切换）。", model_group)
         model_hint.setWordWrap(True)
         v.addWidget(model_group)
         v.addWidget(model_hint)
@@ -306,6 +361,15 @@ class SettingsPage(QWidget):
             getattr(self, "recorder_guard_switch", None),
         ) if c is not None]
         self._wrap_cards_lines = {}   # id(card) -> 上次行数（行数变化才改高度，防递归）
+
+        # 模型选择（每后端一个，值为下拉文字；"" = 根目录默认）
+        self.ocr_cpu_model = ""
+        self.ocr_gpu_model = ""
+        self.asr_cpu_model = ""
+        self.asr_gpu_model = ""
+
+        # 扫描模型目录，刷新模型卡副文本（显示实际加载的模型文件）
+        self._refresh_model_info()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
@@ -339,6 +403,101 @@ class SettingsPage(QWidget):
                 card.setFixedHeight(70 + (lines - 1) * line_h)
             except Exception:
                 pass
+
+    # ---------------- 模型信息显示 ----------------
+
+    def _refresh_model_info(self):
+        """扫描模型目录，刷新 OCR/ASR 模型卡副文本（显示实际加载的模型文件+大小）。
+
+        - OCR：显示 models/ocr 下实际存在的 .onnx（CPU 推理用）；
+        - ASR：显示 config.json 指定（或默认 model.int8.onnx）的主模型 + 标点模型，
+          CPU/GPU 当前同用该模型；若目录内还有其它 .onnx（如 model.onnx fp32），
+          作为可切换候选一并列出。
+        """
+        import json as _json
+        base = os.path.dirname(os.path.abspath(__file__))
+
+        def _mb(p):
+            return max(0.1, os.path.getsize(p) / 1048576)
+
+        # —— OCR ——
+        ocr_dir = self.ocr_model_dir or os.path.join(base, "models", "ocr")
+        ocr_parts = []
+        if os.path.isdir(ocr_dir):
+            for f in sorted(os.listdir(ocr_dir)):
+                if f.lower().endswith(".onnx"):
+                    ocr_parts.append(f"{f}（{_mb(os.path.join(ocr_dir, f)):.1f}MB）")
+        self.ocr_model_card.setContent(
+            ("模型: " + " + ".join(ocr_parts) + "（CPU 推理）") if ocr_parts
+            else "未找到模型文件（目录内无 .onnx）")
+
+        # —— ASR ——
+        asr_dir = self.asr_model_dir or os.path.join(base, "models", "asr")
+        main_name = "model.int8.onnx"
+        if os.path.isdir(asr_dir):
+            try:
+                cfg_path = os.path.join(asr_dir, "config.json")
+                if os.path.isfile(cfg_path):
+                    with open(cfg_path, "r", encoding="utf-8") as f:
+                        cfg = _json.load(f)
+                    main_name = str(cfg.get("model_file", main_name) or main_name)
+            except Exception:
+                pass
+        parts = []
+        if os.path.isdir(asr_dir):
+            mp = os.path.join(asr_dir, main_name)
+            if os.path.isfile(mp):
+                parts.append(f"{main_name}（{_mb(mp):.1f}MB）")
+            pp = os.path.join(asr_dir, "punct", "model.int8.onnx")
+            if os.path.isfile(pp):
+                parts.append(f"标点 punct/model.int8.onnx（{_mb(pp):.1f}MB）")
+            # 目录内其它可切换候选 onnx
+            cands = [f for f in sorted(os.listdir(asr_dir))
+                     if f.lower().endswith(".onnx") and f != main_name]
+            if cands:
+                parts.append("候选: " + ", ".join(cands))
+        self.asr_model_card.setContent(
+            ("CPU/GPU 同用: " + " + ".join(parts)) if parts else "未找到模型文件")
+
+        # —— 模型下拉（每行一个：扫描根目录下可用模型；保存的是下拉文字）——
+        def _fill(combo, items, saved):
+            combo.blockSignals(True)
+            combo.clear()
+            if not items:
+                combo.addItem("（未找到模型）", "")
+                combo.setEnabled(False)
+                combo.blockSignals(False)
+                return
+            combo.setEnabled(True)
+            for it in items:
+                combo.addItem(it["label"] or it["name"], userData=it["path"])
+            idx = combo.findText(saved or "") if saved else 0
+            if idx < 0:
+                idx = 0
+            combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+        ocr_root = self.ocr_model_dir or os.path.join(base, "models", "ocr")
+        ocr_items = []
+        if os.path.isdir(ocr_root):
+            try:
+                from ocr import list_ocr_models
+                ocr_items = list_ocr_models(ocr_root)
+            except Exception:
+                ocr_items = []
+        _fill(self.ocr_cpu_model_combo, ocr_items, getattr(self, "ocr_cpu_model", ""))
+        _fill(self.ocr_gpu_model_combo, ocr_items, getattr(self, "ocr_gpu_model", ""))
+
+        asr_root = self.asr_model_dir or os.path.join(base, "models", "asr")
+        asr_items = []
+        if os.path.isdir(asr_root):
+            try:
+                from asr import list_asr_models
+                asr_items = list_asr_models(asr_root)
+            except Exception:
+                asr_items = []
+        _fill(self.asr_cpu_model_combo, asr_items, getattr(self, "asr_cpu_model", ""))
+        _fill(self.asr_gpu_model_combo, asr_items, getattr(self, "asr_gpu_model", ""))
 
     @staticmethod
     def _shortcut_label(key: str) -> str:
@@ -426,7 +585,7 @@ class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
                 from ocr import get_ocr_pool
                 settings = self.settings_manager.load() if hasattr(self, "settings_manager") else {}
                 workers = int(settings.get("ocr_concurrency", 0)) or min(4, max(1, (os.cpu_count() or 4) // 2))
-                workers = max(1, min(8, workers))
+                workers = max(1, min(16, workers))
                 get_ocr_pool(workers)
                 tracelog.info(f"[OCR] 后台预热完成：{workers} 个引擎常驻")
             except Exception as e:
@@ -530,6 +689,11 @@ class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
             fn(page)
         finally:
             self._page_built.add(name)
+        # 懒页面全部构建完 → 重新应用设置：_load_settings 在 __init__ 提前执行时
+        # 这些页面控件尚不存在（hasattr 全 False），恢复被跳过；构建完成后
+        # 再应用一次，页面控件才能显示用户上次保存的路径/选项。
+        if not self._page_builders:
+            self._load_settings()
 
     def _ensure_page_built(self, index):
         """切换兜底：切到尚未构建的页面时立即同步构建。"""
@@ -611,7 +775,7 @@ class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
 
     def _check_ocr_model(self):
         """OCR 模型可用性轻量检查（仅文件存在性，不加载引擎）。"""
-        model_dir = self._ocr_model_dir()
+        model_dir = self._ocr_model_path("cpu")
         if model_dir:
             try:
                 from ocr import models_complete
@@ -622,14 +786,19 @@ class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
 
     def _check_asr_model(self):
         """ASR 模型可用性轻量检查（SenseVoice：model*.onnx + tokens.txt，不加载引擎）。"""
-        model_dir = self._asr_model_dir()
+        model_dir = self._asr_model_path("cpu")
         if model_dir:
             try:
                 from asr import models_complete
                 return models_complete(model_dir)
             except Exception:
                 return False
-        return True  # 空=自动探测，交给引擎
+        # 未显式指定 → 真实探测自动候选（exe 同级 / 项目根 models/asr），失败即不可用
+        try:
+            from asr import resolve_model_dir
+            return resolve_model_dir("") is not None
+        except Exception:
+            return False
 
 
 
@@ -820,6 +989,8 @@ QProgressBar::chunk {{
         sp.ocr_model_card.openClicked.connect(lambda: self._open_model_dir("ocr"))
         sp.asr_model_card.openClicked.connect(lambda: self._open_model_dir("asr"))
         sp.reset_model_card.clicked.connect(self._reset_model_dir)
+        # 模型下拉切换 → 保存设置（重启后生效，卡片说明已提示）
+        sp.model_selection_changed.connect(self._save_settings)
         for name in sp.shortcut_cards:
             sp.shortcut_cards[name].clicked.connect(
                 lambda _=False, n=name: self._edit_shortcut(n))
@@ -854,6 +1025,12 @@ QProgressBar::chunk {{
             self._set_model_dir("ocr", str(settings["ocr_model_dir"]))
         if "asr_model_dir" in settings:
             self._set_model_dir("asr", str(settings["asr_model_dir"]))
+        # 模型选择（下拉）：先写入字段再刷新下拉（保持选中恢复）
+        sp.ocr_cpu_model = str(settings.get("ocr_cpu_model", "") or "")
+        sp.ocr_gpu_model = str(settings.get("ocr_gpu_model", "") or "")
+        sp.asr_cpu_model = str(settings.get("asr_cpu_model", "") or "")
+        sp.asr_gpu_model = str(settings.get("asr_gpu_model", "") or "")
+        sp._refresh_model_info()
         self.shortcut_manager.load(settings)
         self._nav_current = str(settings.get("nav_current", ""))
         self._refresh_shortcut_cards()
@@ -903,6 +1080,55 @@ QProgressBar::chunk {{
             if route_key in self._nav_meta and route_key not in self._nav_hidden:
                 self.navigationInterface.removeWidget(route_key)
                 self._nav_hidden.append(route_key)
+
+        # ---- 页面级参数恢复（此前保存了 14 个字段但加载遗漏 → 重启丢设置）----
+        # 散图录制页
+        if "image_format" in settings and hasattr(self, "image_format_combo"):
+            _i = self.image_format_combo.findText(str(settings["image_format"]))
+            if _i >= 0:
+                self.image_format_combo.setCurrentIndex(_i)
+        if "image_path" in settings and hasattr(self, "image_path_edit"):
+            self.image_path_edit.setText(str(settings["image_path"]))
+        if "image_name" in settings and hasattr(self, "image_name_edit"):
+            self.image_name_edit.setText(str(settings["image_name"]))
+        if "image_interval" in settings and hasattr(self, "interval_spin"):
+            try:
+                self.interval_spin.setValue(float(settings["image_interval"]))
+            except (TypeError, ValueError):
+                pass
+        # PDF 输出页
+        if "pdf_path" in settings and hasattr(self, "pdf_path_edit"):
+            self.pdf_path_edit.setText(str(settings["pdf_path"]))
+        if "pdf_name" in settings and hasattr(self, "pdf_name_edit"):
+            self.pdf_name_edit.setText(str(settings["pdf_name"]))
+        # OCR 批量页
+        if "ocr_folder" in settings and hasattr(self, "ocr_folder_edit"):
+            self.ocr_folder_edit.setText(str(settings["ocr_folder"]))
+        if "ocr_recursive" in settings and hasattr(self, "ocr_recursive_switch"):
+            self.ocr_recursive_switch.setChecked(bool(settings["ocr_recursive"]))
+        if "ocr_pdf" in settings and hasattr(self, "ocr_pdf_switch"):
+            self.ocr_pdf_switch.setChecked(bool(settings["ocr_pdf"]))
+        if "ocr_merge" in settings and hasattr(self, "ocr_merge_switch"):
+            self.ocr_merge_switch.setChecked(bool(settings["ocr_merge"]))
+        if "ocr_concurrency" in settings and hasattr(self, "ocr_concurrency_spin"):
+            self.ocr_concurrency_spin.setValue(int(settings["ocr_concurrency"]))
+        # ASR 批量页
+        if "asr_folder" in settings and hasattr(self, "asr_folder_edit"):
+            self.asr_folder_edit.setText(str(settings["asr_folder"]))
+        if "asr_recursive" in settings and hasattr(self, "asr_recursive_switch"):
+            self.asr_recursive_switch.setChecked(bool(settings["asr_recursive"]))
+        if "asr_formats" in settings and hasattr(self, "asr_formats_edit"):
+            self.asr_formats_edit.setText(str(settings["asr_formats"]))
+        if "asr_concurrency" in settings and hasattr(self, "asr_concurrency_spin"):
+            self.asr_concurrency_spin.setValue(int(settings["asr_concurrency"]))
+        if "asr_provider" in settings and hasattr(self, "asr_provider_combo"):
+            idx = self.asr_provider_combo.findData(str(settings["asr_provider"]))
+            if idx >= 0:
+                self.asr_provider_combo.setCurrentIndex(idx)
+        if "asr_gpu_concurrency" in settings and hasattr(self, "asr_gpu_spin"):
+            self.asr_gpu_spin.setValue(int(settings["asr_gpu_concurrency"]))
+        if hasattr(self, "asr_provider_combo"):
+            self._sync_asr_backend_enabled()
 
     def _on_debug_console_changed(self, checked: bool):
         """「隐藏调试终端」开关：勾选=隐藏调试浮窗（默认）；取消勾选=即时弹出浮窗。
@@ -1015,6 +1241,14 @@ QProgressBar::chunk {{
             key = self.shortcut_manager.to_dict().get(name, default_key)
             if not key:
                 continue
+            # 纯 Ctrl+字母/数字 等系统通用组合（全选/保存/打印/切标签）
+            # 不注册全局——只保留应用内快捷键，避免抢走其它程序的系统功能
+            from global_hotkey import is_global_safe
+            if not is_global_safe(key):
+                tracelog.info(
+                    f"[热键] {_ACTION_NAMES.get(name, name)} → {key}（系统通用组合，"
+                    f"仅应用内生效，不全局注册）")
+                continue
             if self.global_hotkeys.register(name, key, hwnd=hwnd):
                 tracelog.info(f"[热键] 全局注册: {_ACTION_NAMES.get(name, name)} → {key}")
             else:
@@ -1069,6 +1303,10 @@ QProgressBar::chunk {{
         sp = getattr(self, "settings_page", None)
         if sp is None:
             return  # 页面构建早期（settings_page 未建）触发的开关信号，跳过全局部分
+        # 关键：懒页面构建完成前，未构建页面控件不存在，若直接写空/默认会覆盖
+        # 用户上次保存的值（启动时设置页开关信号常触发此路径）。因此先读旧值，
+        # 控件缺失的字段保留旧值，绝不写空覆盖。
+        old = self.settings_manager.load()
         self.settings_manager.save({
             "always_on_top": sp.always_on_top_switch.isChecked(),
             "dark_mode": sp.dark_switch.isChecked(),
@@ -1085,40 +1323,64 @@ QProgressBar::chunk {{
             "nav_current": getattr(self, "_nav_current", ""),
             "nav_hidden": getattr(self, "_nav_hidden", []),
             "nav_custom_pages": getattr(self, "_nav_custom_pages", []),
-            "video_format": getattr(self, "video_format_combo", None).currentText()
-                if hasattr(self, "video_format_combo") else "mp4",
-            "video_fps": self.video_fps_combo.currentData() if hasattr(self, "video_fps_combo") else 30,
-            "video_path": self.video_path_edit.text() if hasattr(self, "video_path_edit") else "",
-            "video_name": self.video_name_edit.text() if hasattr(self, "video_name_edit") else "录制_视频",
+            "video_format": self.video_format_combo.currentText()
+                if hasattr(self, "video_format_combo") else old.get("video_format", "mp4"),
+            "video_fps": self.video_fps_combo.currentData()
+                if hasattr(self, "video_fps_combo") else old.get("video_fps", 30),
+            "video_path": self.video_path_edit.text()
+                if hasattr(self, "video_path_edit") else old.get("video_path", ""),
+            "video_name": self.video_name_edit.text()
+                if hasattr(self, "video_name_edit") else old.get("video_name", "录制_视频"),
             "video_audio_enabled": self.video_audio_switch.isChecked()
-                if hasattr(self, "video_audio_switch") else False,
+                if hasattr(self, "video_audio_switch") else old.get("video_audio_enabled", False),
             "video_audio_loopback": self.video_loopback_combo.currentData() or ""
-                if hasattr(self, "video_loopback_combo") else "",
+                if hasattr(self, "video_loopback_combo") else old.get("video_audio_loopback", ""),
             "video_audio_mic": self.video_mic_combo.currentData() or ""
-                if hasattr(self, "video_mic_combo") else "",
+                if hasattr(self, "video_mic_combo") else old.get("video_audio_mic", ""),
             "image_format": self.image_format_combo.currentText()
-                if hasattr(self, "image_format_combo") else "png",
-            "image_path": self.image_path_edit.text() if hasattr(self, "image_path_edit") else "",
-            "image_name": self.image_name_edit.text() if hasattr(self, "image_name_edit") else "截图",
+                if hasattr(self, "image_format_combo") else old.get("image_format", "png"),
+            "image_path": self.image_path_edit.text()
+                if hasattr(self, "image_path_edit") else old.get("image_path", ""),
+            "image_name": self.image_name_edit.text()
+                if hasattr(self, "image_name_edit") else old.get("image_name", "截图"),
             "image_interval": self.interval_spin.value()
-                if hasattr(self, "interval_spin") else 1.0,
-            "pdf_path": self.pdf_path_edit.text() if hasattr(self, "pdf_path_edit") else "",
-            "pdf_name": self.pdf_name_edit.text() if hasattr(self, "pdf_name_edit") else "输出",
-            "ocr_folder": self.ocr_folder_edit.text() if hasattr(self, "ocr_folder_edit") else "",
+                if hasattr(self, "interval_spin") else old.get("image_interval", 1.0),
+            "pdf_path": self.pdf_path_edit.text()
+                if hasattr(self, "pdf_path_edit") else old.get("pdf_path", ""),
+            "pdf_name": self.pdf_name_edit.text()
+                if hasattr(self, "pdf_name_edit") else old.get("pdf_name", "输出"),
+            "ocr_folder": self.ocr_folder_edit.text()
+                if hasattr(self, "ocr_folder_edit") else old.get("ocr_folder", ""),
             "ocr_recursive": self.ocr_recursive_switch.isChecked()
-                if hasattr(self, "ocr_recursive_switch") else True,
-            "ocr_pdf": self.ocr_pdf_switch.isChecked() if hasattr(self, "ocr_pdf_switch") else True,
+                if hasattr(self, "ocr_recursive_switch") else old.get("ocr_recursive", True),
+            "ocr_pdf": self.ocr_pdf_switch.isChecked()
+                if hasattr(self, "ocr_pdf_switch") else old.get("ocr_pdf", True),
             "ocr_merge": self.ocr_merge_switch.isChecked()
-                if hasattr(self, "ocr_merge_switch") else True,
+                if hasattr(self, "ocr_merge_switch") else old.get("ocr_merge", True),
             "ocr_concurrency": self.ocr_concurrency_spin.value()
-                if hasattr(self, "ocr_concurrency_spin") else 2,
-            "asr_folder": self.asr_folder_edit.text() if hasattr(self, "asr_folder_edit") else "",
+                if hasattr(self, "ocr_concurrency_spin") else old.get("ocr_concurrency", 2),
+            "asr_folder": self.asr_folder_edit.text()
+                if hasattr(self, "asr_folder_edit") else old.get("asr_folder", ""),
             "asr_recursive": self.asr_recursive_switch.isChecked()
-                if hasattr(self, "asr_recursive_switch") else True,
+                if hasattr(self, "asr_recursive_switch") else old.get("asr_recursive", True),
             "asr_formats": self.asr_formats_edit.text()
-                if hasattr(self, "asr_formats_edit") else "wav,mp3,m4a,flac,ogg,mp4,mkv,avi,mov,webm",
+                if hasattr(self, "asr_formats_edit") else old.get(
+                    "asr_formats", "wav,mp3,m4a,flac,ogg,mp4,mkv,avi,mov,webm"),
             "asr_concurrency": self.asr_concurrency_spin.value()
-                if hasattr(self, "asr_concurrency_spin") else 2,
+                if hasattr(self, "asr_concurrency_spin") else old.get("asr_concurrency", 2),
+            "asr_provider": self.asr_provider_combo.currentData()
+                if hasattr(self, "asr_provider_combo") else old.get("asr_provider", "cpu"),
+            "asr_gpu_concurrency": self.asr_gpu_spin.value()
+                if hasattr(self, "asr_gpu_spin") else old.get("asr_gpu_concurrency", 2),
+            # 模型选择（每后端一个：下拉文字，"" = 根目录默认；设置页未构建时保留旧值）
+            "ocr_cpu_model": self.settings_page.ocr_cpu_model_combo.currentText()
+                if hasattr(self.settings_page, "ocr_cpu_model_combo") else old.get("ocr_cpu_model", ""),
+            "ocr_gpu_model": self.settings_page.ocr_gpu_model_combo.currentText()
+                if hasattr(self.settings_page, "ocr_gpu_model_combo") else old.get("ocr_gpu_model", ""),
+            "asr_cpu_model": self.settings_page.asr_cpu_model_combo.currentText()
+                if hasattr(self.settings_page, "asr_cpu_model_combo") else old.get("asr_cpu_model", ""),
+            "asr_gpu_model": self.settings_page.asr_gpu_model_combo.currentText()
+                if hasattr(self.settings_page, "asr_gpu_model_combo") else old.get("asr_gpu_model", ""),
         })
 
     # ---------------- 全局行为 ----------------
@@ -1133,12 +1395,39 @@ QProgressBar::chunk {{
         else:
             sp.asr_model_dir = path
         card.setContent(path or "自动探测（默认）")
+        sp._refresh_model_info()
 
     def _ocr_model_dir(self) -> str:
         return getattr(self.settings_page, "ocr_model_dir", "") or ""
 
     def _asr_model_dir(self) -> str:
         return getattr(self.settings_page, "asr_model_dir", "") or ""
+
+    def _ocr_model_path(self, backend: str = "cpu") -> str:
+        """OCR 模型完整目录：根路径 + 设置页下拉选中的子模型（空=根/自动探测）。
+
+        backend: 'cpu'/'gpu' —— GPU 行选中模型在当前纯 CPU onnxruntime 下暂不生效，
+        OCR 引擎统一用 CPU 行模型（后端由 onnxruntime 自动探测，装 CUDA 版后生效）。
+        """
+        combo = getattr(self.settings_page,
+                        "ocr_cpu_model_combo" if backend == "cpu" else "ocr_gpu_model_combo",
+                        None)
+        if combo is not None:
+            idx = combo.currentIndex()
+            if idx >= 0 and combo.itemData(idx):
+                return str(combo.itemData(idx))
+        return self._ocr_model_dir()
+
+    def _asr_model_path(self, backend: str = "cpu") -> str:
+        """ASR 模型完整目录：根路径 + 设置页下拉选中的子模型（空=根/自动探测）。"""
+        combo = getattr(self.settings_page,
+                        "asr_cpu_model_combo" if backend == "cpu" else "asr_gpu_model_combo",
+                        None)
+        if combo is not None:
+            idx = combo.currentIndex()
+            if idx >= 0 and combo.itemData(idx):
+                return str(combo.itemData(idx))
+        return self._asr_model_dir()
 
     def _choose_model_dir(self, kind: str):
         """弹目录选择框设置 OCR/ASR 模型路径，并保存。"""
@@ -1294,7 +1583,82 @@ QProgressBar::chunk {{
                         position=InfoBarPosition.TOP_RIGHT)
 
 
+def _asr_worker_main():
+    """子进程模式：ASR 批量转写（--asr-worker）。
+
+    为什么需要独立进程：OCR（rapidocr → pip onnxruntime 1.24.4）与 sherpa_onnx
+    内置 onnxruntime 在同一进程共存时，sherpa 的 CUDA provider 会绑定到不匹配
+    的 DLL，GPU 推理直接段错误崩溃（0xC0000005）。转写放进干净子进程后，
+    GPU 与 OCR 物理隔离，互不干扰。
+
+    协议：stdin 收一条 JSON 配置；stdout 逐行输出 JSON 事件
+    （t=seg / t=file / t=done / t=err），父进程解析后转发为 Qt 信号。
+    """
+    import json
+    import io as _io
+    try:
+        sys.stdout = _io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                       errors="replace", line_buffering=True)
+    except Exception:
+        pass
+    try:
+        cfg = json.load(sys.stdin)
+    except Exception as e:
+        print(json.dumps({"t": "err", "msg": f"配置解析失败: {e}"}, ensure_ascii=False), flush=True)
+        return
+    files = cfg.get("files") or []
+    total = len(files)
+    done = txt_count = fail_count = 0
+    import tracelog
+
+    def on_segment_done(f, seg_done, seg_total):
+        print(json.dumps({"t": "seg", "name": os.path.basename(f),
+                          "seg_done": seg_done, "seg_total": seg_total},
+                         ensure_ascii=False), flush=True)
+
+    def on_file_done(f, text):
+        nonlocal done, txt_count, fail_count
+        done += 1
+        try:
+            from asr import write_asr_txt
+            txt = write_asr_txt(f, text, cfg.get("out_dir") or None)
+            if txt:
+                txt_count += 1
+            else:
+                fail_count += 1
+        except Exception as e:
+            tracelog.error(f"[ASR 子进程] 写 txt 失败 {f}: {e}")
+            fail_count += 1
+        print(json.dumps({"t": "file", "name": os.path.basename(f),
+                          "done": done, "total": total}, ensure_ascii=False), flush=True)
+
+    try:
+        from asr import transcribe_parallel_segments
+        transcribe_parallel_segments(
+            files, max_workers=cfg.get("max_workers", 4),
+            model_dir=cfg.get("model_dir", ""),
+            cpu_workers=cfg.get("cpu_workers"),
+            gpu_workers=cfg.get("gpu_workers"),
+            cpu_model_dir=cfg.get("cpu_model_dir"),
+            gpu_model_dir=cfg.get("gpu_model_dir"),
+            on_file_done=on_file_done,
+            on_segment_done=on_segment_done)
+        remaining = total - done
+        print(json.dumps({"t": "done", "txt": txt_count, "fail": fail_count,
+                          "remaining": remaining}, ensure_ascii=False), flush=True)
+    except Exception as e:
+        print(json.dumps({"t": "err", "msg": str(e)}, ensure_ascii=False), flush=True)
+        print(json.dumps({"t": "done", "txt": txt_count,
+                          "fail": fail_count + (total - done), "remaining": 0},
+                         ensure_ascii=False), flush=True)
+
+
 def main():
+    # 子进程转写模式：不建 GUI，跑完即退（打包版 exe 同样支持该参数）
+    if "--asr-worker" in sys.argv:
+        _asr_worker_main()
+        return
+
     import traceback as _tb
 
     # 全局异常兜底（录制守护的一部分）：未捕获异常只记录日志、不使进程退出，

@@ -87,7 +87,7 @@ class OcrPageMixin(object):
 
         # 并发数：多线程并行识别（每线程独立引擎）
         self.ocr_concurrency_spin = QSpinBox()
-        self.ocr_concurrency_spin.setRange(1, 8)
+        self.ocr_concurrency_spin.setRange(1, 16)
         self.ocr_concurrency_spin.setValue(min(4, max(1, (os.cpu_count() or 4) // 2)))
         self.ocr_concurrency_spin.setToolTip(
             "同时运行几个 OCR 引擎（并行识别）。\n"
@@ -227,7 +227,7 @@ class OcrPageMixin(object):
                 pending, folder,
                 merge_images=self.ocr_merge_switch.isChecked(),
                 max_workers=self.ocr_concurrency_spin.value(),
-                model_dir=self._ocr_model_dir(),
+                model_dir=self._ocr_model_path("cpu"),
                 out_dir=out_dir)
             self._folder_ocr_worker.progress.connect(self._on_folder_ocr_progress)
             self._folder_ocr_worker.finished.connect(self._on_folder_ocr_done)

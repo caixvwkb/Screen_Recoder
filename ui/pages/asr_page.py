@@ -48,7 +48,7 @@ class AsrPageMixin(object):
         self.asr_folder_open_btn.clicked.connect(self._open_asr_folder)
         folder_card = TwoRowCard(
             FluentIcon.FOLDER, "识别文件夹",
-            "选择包含音频或视频的文件夹；逐文件转写为文字并生成 <文件名>_语音转写.txt")
+            "选择包含音频或视频的文件夹；逐文件转写为文字并生成 <文件名>.txt")
         folder_card.add_control(self.asr_folder_edit, 1)
         folder_card.add_control(self.asr_folder_btn)
         folder_card.add_control(self.asr_folder_open_btn)
@@ -88,25 +88,99 @@ class AsrPageMixin(object):
         src_card.addGroupWidget(list_wrap)
         self._asr_list_items = {}
 
-        # —— 块② 识别设置 ——
+        # —— 块② 识别设置（三行：推理后端 / CPU 并发数 / GPU 并发数） ——
         set_card = page.block_cards["识别设置"]
 
-        # 并发数
+        # 行1 推理后端
+        self.asr_provider_combo = ComboBox()
+        self.asr_provider_combo.addItem("CPU（默认，兼容性最好）", userData="cpu")
+        self.asr_provider_combo.addItem("GPU（NVIDIA CUDA 加速）", userData="gpu")
+        self.asr_provider_combo.addItem("CPU + GPU 混合（负载均衡）", userData="both")
+        self.asr_provider_combo.setCurrentIndex(0)
+        self.asr_provider_combo.setToolTip(
+            "推理设备：\n"
+            "· CPU（默认）：全部段用 CPU 引擎\n"
+            "· GPU：全部段用 GPU 引擎（需 sherpa-onnx+cuda 版与 CUDA 运行库）\n"
+            "· 混合：CPU 与 GPU 同时参与，段任务动态分给空闲引擎")
+        self.asr_provider_combo.currentIndexChanged.connect(self._save_settings)
+        self.asr_provider_combo.currentIndexChanged.connect(self._sync_asr_backend_enabled)
+        backend_card = TwoRowCard(
+            FluentIcon.INFO, "推理后端",
+            "选择转写用哪个设备：CPU / GPU / 混合（混合模式按段动态负载均衡，谁空闲谁干）")
+        backend_card.add_control(BodyLabel("推理后端:"))
+        backend_card.add_control(self.asr_provider_combo)
+        backend_card.controls.addStretch(1)
+        set_card.addGroupWidget(backend_card)
+
+        # 行2 CPU 并发数
         self.asr_concurrency_spin = QSpinBox()
-        self.asr_concurrency_spin.setRange(1, 8)
-        self.asr_concurrency_spin.setValue(min(4, max(1, (os.cpu_count() or 4) // 2)))
+        _cpu_max = max(1, os.cpu_count() or 4)          # 理论上限 = 全部逻辑核（实机取，低配机不强制抬升）
+        _cpu_reco = max(1, (os.cpu_count() or 4) // 2)  # 推荐 = 核数一半（实机计算）
+        self.asr_concurrency_spin.setRange(1, _cpu_max)
+        self.asr_concurrency_spin.setValue(min(4, _cpu_reco))
         self.asr_concurrency_spin.setToolTip(
-            "同时转写几个文件（并行）。\n"
-            "每路占用 1 个 CPU 核，并行数越大越快、但越占 CPU/内存。\n"
-            "建议不超过 CPU 核数一半。")
+            "同时跑几个 CPU 转写引擎（每路 1 个 CPU 核）。\n"
+            f"上限 {_cpu_max} = 逻辑核总数（理论值，严禁拉满）；\n"
+            f"推荐 ≤{_cpu_reco}（核数一半）。")
         self.asr_concurrency_spin.valueChanged.connect(self._save_settings)
         self._apply_num_qss(self.asr_concurrency_spin)
+        self._cpu_reco_label = BodyLabel(f"推荐 ≤{_cpu_reco}（CPU 共 {_cpu_max} 逻辑核）")
         conc_card = TwoRowCard(
-            FluentIcon.SETTING, "并发数", "同时转写几个文件（每路独立识别器）；越大越快但越占 CPU/内存（建议≤CPU 核数一半）")
-        conc_card.add_control(BodyLabel("并发数:"))
+            FluentIcon.SETTING, "CPU 并发数",
+            f"同时跑几个 CPU 转写引擎（每路独立识别器）；越大越快但越占 CPU/内存。"
+            f"上限 {_cpu_max} = 逻辑核总数（理论值，严禁拉满）；建议 ≤{_cpu_reco}（核数一半）")
+        conc_card.add_control(BodyLabel("CPU 并发数:"))
         conc_card.add_control(self.asr_concurrency_spin)
+        conc_card.controls.addSpacing(8)
+        conc_card.add_control(self._cpu_reco_label)
         conc_card.controls.addStretch(1)
         set_card.addGroupWidget(conc_card)
+
+        # 行3 GPU 并发数（含本机显存推荐 + 理论上限，全部实机动态计算）
+        self.asr_gpu_spin = QSpinBox()
+        _gpu_max = 8
+        _gpu_default = 2
+        try:
+            import asr as _asr
+            _gi = _asr.get_gpu_info()
+            if _gi:
+                # 理论上限 = 总显存 ÷ 单实例约 0.7GB（int8，实测 8GB 卡 8 实例可并发）
+                _gpu_max = max(1, _gi[0] // 700)
+                # 默认值 = 按建议 clamp（低配显存机不硬塞 2 个实例，避免 OOM）
+                _rec = _asr.suggest_gpu_workers()
+                _gpu_default = min(2, max(1, _rec))
+        except Exception:
+            pass
+        self.asr_gpu_spin.setRange(1, _gpu_max)
+        self.asr_gpu_spin.setValue(_gpu_default)
+        self.asr_gpu_spin.setToolTip(
+            "同时跑几个 GPU 转写引擎（共享同一张显卡，受显存限制）。\n"
+            "GPU 没有 CPU 那种『核数』概念，这里指并行的 GPU 推理实例数。\n"
+            f"上限 {_gpu_max} = 显存理论最大值（严禁拉满）；推荐值按本机显存自动计算（见卡片说明）。")
+        self.asr_gpu_spin.valueChanged.connect(self._save_settings)
+        self._apply_num_qss(self.asr_gpu_spin)
+        self._gpu_reco_label = BodyLabel("")
+        try:
+            import asr as _asr
+            _gi = _asr.get_gpu_info()
+            _rec = _asr.suggest_gpu_workers()
+            if _gi:
+                self._gpu_reco_label.setText(f"推荐 ≤{_rec}（显存 {_gi[0] // 1024}GB，可用 {max(1, _gi[1] // 1024)}GB）")
+            else:
+                self._gpu_reco_label.setText("未检测到 NVIDIA 显卡（GPU 选项将自动回退 CPU）")
+        except Exception:
+            self._gpu_reco_label.setText("")
+        gpu_card = TwoRowCard(
+            FluentIcon.CAMERA, "GPU 并发数",
+            f"并行的 GPU 推理实例数（非核数，受显存限制）。"
+            f"上限 {_gpu_max} = 总显存÷单实例约0.7GB（理论值，严禁拉满）；"
+            f"推荐 = (可用显存-预留1.5GB)÷单实例约1GB，自动计算（见右侧）")
+        gpu_card.add_control(BodyLabel("GPU 并发数:"))
+        gpu_card.add_control(self.asr_gpu_spin)
+        gpu_card.controls.addSpacing(8)
+        gpu_card.add_control(self._gpu_reco_label)
+        gpu_card.controls.addStretch(1)
+        set_card.addGroupWidget(gpu_card)
 
         # 模型与自动化说明卡（模型路径/视频自动转写开关集中在设置页）
         info_card = TwoRowCard(
@@ -163,6 +237,21 @@ class AsrPageMixin(object):
                 self.asr_concurrency_spin.setValue(int(settings["asr_concurrency"]))
             except (TypeError, ValueError):
                 pass
+        if "asr_provider" in settings:
+            idx = self.asr_provider_combo.findData(str(settings["asr_provider"]))
+            if idx >= 0:
+                self.asr_provider_combo.setCurrentIndex(idx)
+        if "asr_gpu_concurrency" in settings:
+            try:
+                self.asr_gpu_spin.setValue(int(settings["asr_gpu_concurrency"]))
+            except (TypeError, ValueError):
+                pass
+        self._sync_asr_backend_enabled()
+
+    def _sync_asr_backend_enabled(self):
+        """GPU 并发数仅在 GPU/混合模式下可调（CPU 模式置灰）。"""
+        prov = self.asr_provider_combo.currentData()
+        self.asr_gpu_spin.setEnabled(prov in ("gpu", "both"))
     def _choose_asr_folder(self):
         folder = QFileDialog.getExistingDirectory(
             self, "选择包含音频/视频的文件夹",
@@ -201,6 +290,8 @@ class AsrPageMixin(object):
 
             # ASR 模型检查：显式指定路径无效时明确提示
             if not self._check_asr_model():
+                self._show_tip("ASR 模型缺失",
+                               "未找到 ASR 外置模型目录。请将 models/asr 放到程序目录，或在设置中指定模型路径。")
                 return False
 
             # 未完成重传：时间标签识别已完成的文件（输出 txt 存在且新于源文件），自动跳过
@@ -221,11 +312,30 @@ class AsrPageMixin(object):
             self.asr_status_label.setText(
                 f"状态: 正在转写 {len(pending)} 个文件"
                 + (f"（已完成 {skipped} 个不重复）" if skipped else "") + " …")
+            prov = self.asr_provider_combo.currentData()
+            cpu_w = self.asr_concurrency_spin.value()
+            gpu_w = self.asr_gpu_spin.value()
+            cpu_workers = cpu_w if prov in ("cpu", "both") else 0
+            gpu_workers = gpu_w if prov in ("gpu", "both") else 0
+            # GPU 不可用时业务合并：恢复 CPU 并发（纯 GPU 后端回退成 CPU，
+            # 避免只剩 GPU 路数、比纯 CPU 更慢；探测有模块级缓存，只探测一次）
+            if gpu_workers > 0:
+                try:
+                    from asr import _cuda_usable
+                    if not _cuda_usable(self._asr_model_path("gpu")):
+                        cpu_workers = max(cpu_w, gpu_w)
+                        gpu_workers = 0
+                except Exception:
+                    pass
             self._folder_asr_worker = ASRWorker(
                 pending,
-                max_workers=self.asr_concurrency_spin.value(),
-                model_dir=self._asr_model_dir(),
-                out_dir=out_dir)
+                max_workers=cpu_w,
+                model_dir=self._asr_model_path("cpu"),
+                out_dir=out_dir,
+                cpu_workers=cpu_workers,
+                gpu_workers=gpu_workers,
+                cpu_model_dir=self._asr_model_path("cpu"),
+                gpu_model_dir=self._asr_model_path("gpu"))
             self._folder_asr_worker.progress.connect(self._on_asr_progress)
             self._folder_asr_worker.finished.connect(self._on_asr_done)
             self._folder_asr_worker.failed.connect(self._on_asr_failed)

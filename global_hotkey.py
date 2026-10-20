@@ -48,6 +48,26 @@ _MOD_MAP = {
 }
 
 
+def is_global_safe(shortcut: str) -> bool:
+    """判断快捷键是否适合注册为「全局」热键。
+
+    纯 Ctrl+字母/数字（Ctrl+A 全选、Ctrl+S 保存、Ctrl+P 打印、Ctrl+1 切标签）
+    是系统通用组合，全局注册会抢走其它程序的对应功能——此类只应保留
+    应用内快捷键（窗口聚焦时生效），不注册全局。允许全局的：
+      - 含 Alt 或 Shift 的组合（Ctrl+Alt+1、Alt+A、Ctrl+Shift+X）；
+      - F 功能键（F1-F24）；
+      - Enter/Return（由调用方决定是否临时注册）。
+    """
+    parts = shortcut.split("+")
+    mods = {p.strip() for p in parts[:-1]}
+    key = parts[-1].strip()
+    if key in ("Return", "Enter"):
+        return True
+    if key.startswith("F") and key[1:].isdigit():
+        return True
+    return bool(mods & {"Alt", "Shift"})
+
+
 class GlobalHotkeyManager(QObject):
     """注册/注销全局热键，并把 WM_HOTKEY 消息转成 Qt 信号。"""
 

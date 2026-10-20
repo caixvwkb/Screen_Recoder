@@ -9,6 +9,7 @@
 """
 import tracelog
 import os
+import sys
 import threading
 
 from PySide6.QtCore import QObject, Signal
@@ -188,22 +189,34 @@ class FolderOcrWorker(QObject):
 class ASRWorker(QObject):
     """后台对一批音频/视频文件做语音转写（SenseVoice），为「ASR 识别」页服务。
 
-    - 每个文件转写后生成同目录下 <文件名>_语音转写.txt；
-    - 并行转写（每线程独立识别器，显著加速）。
-    start() 启动线程，完成后发 finished(生成txt数, 失败文件数)。
+    - 转写运行在**独立子进程**（--asr-worker 模式）：OCR 的 pip onnxruntime
+      与 sherpa onnxruntime 同进程共存会导致 GPU 推理段错误崩溃，
+      子进程隔离后 GPU/OCR 互不干扰；
+    - 进度/结果经子进程 stdout 的 JSON 行回传，父进程转发为 Qt 信号；
+    - 每个文件转写后立即写 <文件名>_语音转写.txt（输出目录或源文件旁）。
+    start() 启动子进程，完成后发 finished(生成txt数, 失败文件数)。
     """
     progress = Signal(int, int, str, int, int)  # 文件done, 文件total, 文件名, 段done, 段total
     finished = Signal(int, int)        # 成功生成 txt 数, 失败文件数
     failed = Signal(str)
 
-    def __init__(self, files, max_workers=4, model_dir="", out_dir=""):
+    def __init__(self, files, max_workers=4, model_dir="", out_dir="",
+                 cpu_workers=None, gpu_workers=None,
+                 cpu_model_dir=None, gpu_model_dir=None,
+                 _entry=None):
         super().__init__()
         self._files = list(files)
         self._max_workers = max_workers
         self._model_dir = model_dir
         self._out_dir = out_dir
+        self._cpu_workers = cpu_workers
+        self._gpu_workers = gpu_workers
+        self._cpu_model_dir = cpu_model_dir
+        self._gpu_model_dir = gpu_model_dir
+        self._entry = _entry
         self._thread = None
         self._stop_event = threading.Event()
+        self._proc = None
         self.last_remaining = 0  # 被打断时未处理文件数（供 UI 提示继续转写）
 
     def start(self):
@@ -214,44 +227,83 @@ class ASRWorker(QObject):
         self._thread.start()
 
     def stop(self):
-        """请求中断批量转写：已提交未开始的段取消，已完成文件保留输出。"""
+        """请求中断批量转写：终止子进程（已写出的 txt 保留，可续传）。"""
         self._stop_event.set()
+        if self._proc is not None:
+            try:
+                self._proc.terminate()
+            except Exception:
+                pass
 
     def _run(self):
-        # 按文件为单位即时输出：每个文件识别完成立刻写 txt + 进度 + 统计，
-        # 中途失败只影响失败文件，已完成文件不丢。未触发 on_file_done 的
-        # 文件（解码失败/空音频）在结束时计入失败。
-        from asr import transcribe_parallel_segments, write_asr_txt
+        import json
+        import subprocess
         total = len(self._files)
-        done, txt_count, fail_count = [0], [0], [0]
-        lock = threading.Lock()
-
-        def on_segment_done(f, seg_done, seg_total):
-            # 段级进度（全局累计，一直自增）
-            self.progress.emit(done[0], total, os.path.basename(f), seg_done, seg_total)
-
-        def on_file_done(f, text):
-            with lock:
-                done[0] += 1
-                self.progress.emit(done[0], total, os.path.basename(f), 0, 0)
-                txt = write_asr_txt(f, text, self._out_dir or None)
-                if txt:
-                    txt_count[0] += 1
-                else:
-                    fail_count[0] += 1
-
+        if total == 0:
+            self.finished.emit(0, 0)
+            return
+        if self._entry:
+            cmd = list(self._entry)
+        elif getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--asr-worker"]  # 打包版：exe 自身支持 worker 模式
+        else:
+            main = os.path.abspath(sys.modules["__main__"].__file__)
+            cmd = [sys.executable, main, "--asr-worker"]
+        cfg = {
+            "files": self._files,
+            "out_dir": self._out_dir or "",
+            "max_workers": self._max_workers,
+            "model_dir": self._model_dir or "",
+            "cpu_workers": self._cpu_workers or 0,
+            "gpu_workers": self._gpu_workers or 0,
+            "cpu_model_dir": self._cpu_model_dir or "",
+            "gpu_model_dir": self._gpu_model_dir or "",
+        }
+        env = dict(os.environ)
+        env["PYTHONIOENCODING"] = "utf-8"
+        CREATE_NO_WINDOW = 0x08000000
+        done = 0
         try:
-            transcribe_parallel_segments(
-                self._files, max_workers=self._max_workers,
-                model_dir=self._model_dir,
-                on_file_done=on_file_done,
-                on_segment_done=on_segment_done,
-                cancel_event=self._stop_event)
-            # 正常/打断结束：未处理文件不计失败（可重新转写）
-            remaining = total - done[0]
-            self.last_remaining = remaining
-            self.finished.emit(txt_count[0], fail_count[0])
+            self._proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                env=env, creationflags=CREATE_NO_WINDOW,
+                text=True, encoding="utf-8", errors="replace", bufsize=1)
+            self._proc.stdin.write(json.dumps(cfg, ensure_ascii=False))
+            self._proc.stdin.close()
         except Exception as e:
-            tracelog.error(f"[导出线程] ASR 转写出错: {e}")
+            tracelog.error(f"[ASR] 启动转写子进程失败: {e}")
             self.failed.emit(str(e))
-            self.finished.emit(txt_count[0], fail_count[0] + (total - done[0]))
+            self.finished.emit(0, total)
+            return
+        for line in self._proc.stdout:
+            if self._stop_event.is_set():
+                try:
+                    self._proc.terminate()
+                except Exception:
+                    pass
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+            except Exception:
+                continue
+            t = msg.get("t")
+            if t == "seg":
+                self.progress.emit(done, total, msg.get("name", ""),
+                                   msg.get("seg_done", 0), msg.get("seg_total", 0))
+            elif t == "file":
+                done = int(msg.get("done", done))
+                self.progress.emit(done, total, msg.get("name", ""), 0, 0)
+            elif t == "done":
+                self.last_remaining = int(msg.get("remaining", 0))
+                self.finished.emit(int(msg.get("txt", 0)), int(msg.get("fail", 0)))
+                return
+            elif t == "err":
+                self.failed.emit(msg.get("msg", "转写子进程出错"))
+        # 子进程非正常结束（取消/崩溃）且未发 done
+        self.last_remaining = total - done
+        self.finished.emit(done, total - done)

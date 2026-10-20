@@ -7,6 +7,7 @@
 - 音频解码：soundfile 直读 wav/flac/ogg/opus/mp3；其他格式或视频用
   imageio-ffmpeg 自带的 ffmpeg 转成 16k 单声道 wav（无需系统安装 ffmpeg）。
 """
+import glob
 import os
 import re
 import subprocess
@@ -119,12 +120,203 @@ def resolve_model_dir(explicit_dir: str = "") -> str:
     return None
 
 
-def get_recognizer(model_dir: str = "") -> object:
+_cuda_dll_ready = False
+
+
+def _ensure_cuda_dlls() -> bool:
+    """把 pip 安装的 NVIDIA CUDA 运行库 DLL 目录注入 PATH。
+
+    sherpa-onnx 的 CUDA provider（onnxruntime_providers_cuda.dll）依赖系统
+    cublasLt/cublas/cudart/cudnn/cufft/curand 等 DLL。用 pip 的
+    nvidia-*-cu12 包可免装数 GB 的完整 CUDA Toolkit：DLL 在
+    site-packages\nvidia\<pkg>\bin，注入 PATH 即可被 LoadLibrary 解析。
+    返回是否成功注册（失败不影响 CPU 推理）。
+    """
+    global _cuda_dll_ready
+    if _cuda_dll_ready:
+        return True
+    try:
+        import site as _site
+        dirs = []
+        # 源码运行：pip 安装的 nvidia-*-cu12 包（site-packages\nvidia\<pkg>\bin）
+        for sp in _site.getsitepackages():
+            base = os.path.join(sp, "nvidia")
+            if os.path.isdir(base):
+                for d in glob.glob(os.path.join(base, "*", "bin")):
+                    if os.path.isdir(d):
+                        dirs.append(d)
+        # 打包运行：exe 同级的 nvidia 目录（分发时随包携带即可免装 CUDA）
+        try:
+            from paths import app_base_candidates
+            for root in app_base_candidates():
+                base = os.path.join(root, "nvidia")
+                if os.path.isdir(base):
+                    for d in glob.glob(os.path.join(base, "*", "bin")):
+                        if os.path.isdir(d) and d not in dirs:
+                            dirs.append(d)
+        except Exception:
+            pass
+        if dirs:
+            os.environ["PATH"] = ";".join(dirs) + ";" + os.environ.get("PATH", "")
+            _cuda_dll_ready = True
+            tracelog.info(f"[ASR] CUDA 运行库目录已注入 PATH（{len(dirs)} 个）")
+            return True
+        tracelog.warn("[ASR] 未找到 NVIDIA CUDA 运行库（源码: pip nvidia-*-cu12；打包: exe 同级 nvidia/ 目录），GPU 推理不可用，将回退 CPU")
+    except Exception as e:
+        tracelog.warn(f"[ASR] CUDA DLL 目录探测失败: {e}")
+    return False
+
+
+def get_gpu_info():
+    """查询第一张 NVIDIA 显卡显存。
+
+    返回 (总显存MB, 当前可用MB)，无 NVIDIA 显卡 / 驱动未装 / 探测失败返回 None。
+    用驱动自带的 nvml.dll（System32），无需额外安装。
+    """
+    import ctypes
+    try:
+        nvml = ctypes.WinDLL("nvml.dll")
+        nvml.nvmlInit()
+        handle = ctypes.c_void_p()
+        if nvml.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(handle)) != 0:
+            nvml.nvmlShutdown()
+            return None
+
+        class MemInfo(ctypes.Structure):
+            _fields_ = [("total", ctypes.c_ulonglong),
+                        ("free", ctypes.c_ulonglong),
+                        ("used", ctypes.c_ulonglong)]
+
+        mem = MemInfo()
+        if nvml.nvmlDeviceGetMemoryInfo(handle, ctypes.byref(mem)) != 0:
+            nvml.nvmlShutdown()
+            return None
+        nvml.nvmlShutdown()
+        return int(mem.total // (1024 * 1024)), int(mem.free // (1024 * 1024))
+    except Exception:
+        return None
+
+
+def suggest_gpu_workers(reserve_mb: int = 1536, per_instance_mb: int = 950) -> int:
+    """按当前可用显存推荐 GPU 并发数（并行的 GPU 推理实例数）。
+
+    GPU 没有『核数』概念：并行的推理实例数受显存限制（每个 SenseVoice
+    int8 推理 session 实测约 0.9GB：本机 2/4/6 路峰值显存 1913/3613/5313MB）。
+    公式 = (可用显存 - 桌面/其他程序预留 1.5GB) / 单实例占用，向下取整，最少 1。
+    推荐值本身已含显存预留（本机推荐 6，实测 6 路峰值 5.3GB 安全）；
+    探测失败给保守默认 4。
+    """
+    info = get_gpu_info()
+    if not info:
+        return 4
+    total_mb, free_mb = info
+    return max(1, (free_mb - reserve_mb) // per_instance_mb)
+
+
+def list_asr_models(root_dir: str = "") -> list:
+    """扫描 ASR 模型根目录，返回可用模型列表。
+
+    每个可用模型 = 一个子目录（含 config.json 且主模型文件存在）；
+    根目录本身也算一个（兼容旧扁平结构，无 config.json 时按默认
+    model.int8.onnx 判断）。返回 [{name, path, label}]；name 为
+    config.json 的 name（显示名），label 为子目录名（"" = 根默认）。
+    """
+    from paths import app_base_candidates
+    root = (root_dir or "").strip()
+    if not root:
+        root = resolve_model_dir("")
+    if not root or not os.path.isdir(root):
+        return []
+
+    def _probe(d):
+        cfg = _load_asr_config(d)
+        mtype = str(cfg.get("model_type") or "sense_voice").strip().lower()
+        if mtype == "whisper":
+            f = cfg.get("whisper_encoder") or "encoder.onnx"
+        else:
+            f = cfg.get("model_file") or "model.int8.onnx"
+        if os.path.isfile(os.path.join(d, f)):
+            return cfg, mtype, f
+        return None, mtype, f
+
+    items = []
+    cfg, mtype, f = _probe(root)
+    if cfg is not None:
+        items.append({
+            "name": (cfg.get("name") or "").strip() or "默认（根目录）",
+            "path": root,
+            "label": "",
+            "mtype": mtype,
+        })
+    for sub in sorted(os.listdir(root)):
+        d = os.path.join(root, sub)
+        if not os.path.isdir(d):
+            continue
+        # 标点模型目录（punct/）不是独立 ASR 模型，跳过
+        if sub.strip().lower() in ("punct", "punctuation"):
+            continue
+        cfg, mtype, f = _probe(d)
+        if cfg is None:
+            continue
+        items.append({
+            "name": (cfg.get("name") or "").strip() or sub,
+            "path": d,
+            "label": sub,
+            "mtype": mtype,
+        })
+    return items
+
+
+_cuda_probe_result = None   # None=未探测；True/False 缓存结果（只探测一次）
+
+
+def _cuda_usable(model_dir: str = "") -> bool:
+    """探测当前环境 GPU（CUDA）推理是否可用，模块级缓存只探测一次。
+
+    轻量代价：首次调用会构建并丢弃一个识别器（约 1s）；批量转写开始时
+    有 GPU 并发才调用，避免每个 GPU worker 线程各自失败重试/告警。
+    """
+    global _cuda_probe_result
+    if _cuda_probe_result is not None:
+        return _cuda_probe_result
+    try:
+        import sherpa_onnx
+        _ensure_cuda_dlls()
+        resolved = resolve_model_dir((model_dir or "").strip())
+        if not resolved:
+            _cuda_probe_result = False
+            return False
+        cfg = _load_asr_config(resolved)
+        mtype = str(cfg.get("model_type") or "sense_voice").strip().lower()
+        if mtype == "whisper":
+            sherpa_onnx.OfflineRecognizer.from_whisper(
+                encoder=os.path.join(resolved, cfg.get("whisper_encoder") or "encoder.onnx"),
+                decoder=os.path.join(resolved, cfg.get("whisper_decoder") or "decoder.onnx"),
+                tokens=os.path.join(resolved, cfg.get("tokens_file") or "tokens.txt"),
+                language=str(cfg.get("whisper_language") or "zh"),
+                task="transcribe", num_threads=1, provider="cuda")
+        else:
+            k = dict(
+                model=os.path.join(resolved, cfg.get("model_file") or "model.int8.onnx"),
+                tokens=os.path.join(resolved, cfg.get("tokens_file") or "tokens.txt"),
+                num_threads=1, sample_rate=SAMPLE_RATE, feature_dim=80,
+                use_itn=True, debug=False, provider="cuda")
+            try:
+                sherpa_onnx.OfflineRecognizer.from_sense_voice(language="auto", **k)
+            except TypeError:
+                sherpa_onnx.OfflineRecognizer.from_sense_voice(**k)
+        _cuda_probe_result = True
+    except Exception:
+        _cuda_probe_result = False
+    return _cuda_probe_result
+
+
+def get_recognizer(model_dir: str = "", provider: str = "cpu") -> object:
     """获取（缓存的）SenseVoice 离线识别器；失败返回 None。
 
     thread-local 缓存 key 为模型目录——切换目录/替换模型文件后自动重建。
     """
-    key = explicit_dir = (model_dir or "").strip()
+    key = f"{(model_dir or '').strip()}|{provider}"
     rec = getattr(_recognizer_local, "rec", None)
     rec_key = getattr(_recognizer_local, "rec_key", None)
     if rec is not None and rec_key == key:
@@ -137,16 +329,32 @@ def get_recognizer(model_dir: str = "") -> object:
         _recognizer_local.rec_key = key
         return None
 
-    resolved = resolve_model_dir(explicit_dir)
+    resolved = resolve_model_dir((model_dir or "").strip())
     if not resolved:
         tracelog.warn("[ASR] 未找到外置模型目录 models/asr/，ASR 功能不可用")
         _recognizer_local.rec = False
         _recognizer_local.rec_key = key
         return None
 
-    try:
-        cfg = _load_asr_config(resolved)
-        kwargs = dict(
+    if provider == "cuda":
+        _ensure_cuda_dlls()
+
+    def _build(prov):
+        mtype = str(cfg.get("model_type") or "sense_voice").strip().lower()
+        if mtype == "whisper":
+            # Whisper 模型：encoder/decoder/tokens + language（sherpa-onnx 官方格式）
+            enc = os.path.join(resolved, cfg.get("whisper_encoder") or "encoder.onnx")
+            dec = os.path.join(resolved, cfg.get("whisper_decoder") or "decoder.onnx")
+            tok = os.path.join(resolved, cfg.get("tokens_file") or "tokens.txt")
+            if not (os.path.isfile(enc) and os.path.isfile(dec)):
+                raise FileNotFoundError(f"Whisper 模型不完整: {os.path.normpath(resolved)}")
+            return sherpa_onnx.OfflineRecognizer.from_whisper(
+                encoder=enc, decoder=dec, tokens=tok,
+                language=str(cfg.get("whisper_language") or "zh"),
+                task="transcribe", num_threads=1,
+                provider=("cuda" if prov == "cuda" else "cpu"))
+        # SenseVoice（默认）：单模型文件 + tokens
+        k = dict(
             model=os.path.join(resolved, cfg.get("model_file") or "model.int8.onnx"),
             tokens=os.path.join(resolved, cfg.get("tokens_file") or "tokens.txt"),
             num_threads=1,
@@ -155,20 +363,49 @@ def get_recognizer(model_dir: str = "") -> object:
             use_itn=True,
             debug=False,
         )
+        if prov == "cuda":
+            k["provider"] = "cuda"
         try:  # 新版支持 language 参数
-            _recognizer_local.rec = sherpa_onnx.OfflineRecognizer.from_sense_voice(
-                language="auto", **kwargs)
+            return sherpa_onnx.OfflineRecognizer.from_sense_voice(language="auto", **k)
         except TypeError:
-            _recognizer_local.rec = sherpa_onnx.OfflineRecognizer.from_sense_voice(**kwargs)
+            return sherpa_onnx.OfflineRecognizer.from_sense_voice(**k)
+
+    try:
+        cfg = _load_asr_config(resolved)
+        _recognizer_local.rec = _build(provider)
         _recognizer_local.rec_key = key
+        _mtype = str(cfg.get("model_type") or "sense_voice").strip().lower()
+        _mname = (cfg.get("name") or "").strip()
+        if _mtype == "whisper":
+            _mdesc = f"Whisper（{cfg.get('whisper_encoder') or 'encoder.onnx'} + {cfg.get('whisper_decoder') or 'decoder.onnx'}）"
+        else:
+            _mdesc = f"{_mname or 'SenseVoice'}（{cfg.get('model_file') or 'model.int8.onnx'}）"
         _log_engine_source(
             f"[ASR] ASR 引擎加载成功：本地外置模型 {os.path.normpath(resolved)}\n"
-            f"      模型: {cfg.get('model_file') or 'model.int8.onnx'}（SenseVoice int8，中英日韩粤）\n"
+            f"      模型: {_mdesc}\n"
+            f"      推理: {'GPU（CUDA）' if provider == 'cuda' else 'CPU'}\n"
             f"      配置来源: {_cfg_source_label(resolved)}")
     except Exception as e:
-        tracelog.error(f"[ASR] ASR 引擎加载失败: {e}")
-        _recognizer_local.rec = False
-        _recognizer_local.rec_key = key
+        if provider == "cuda":
+            # GPU 不可用（缺库/驱动/不支持）→ 记录缓存（只告警一次）+ 回退 CPU 重建
+            global _cuda_probe_result
+            if _cuda_probe_result is None:
+                _cuda_probe_result = False
+                tracelog.warn(f"[ASR] GPU 推理不可用（{e}），自动回退 CPU")
+            try:
+                _recognizer_local.rec = _build("cpu")
+                _recognizer_local.rec_key = f"{(model_dir or '').strip()}|cpu"
+                _log_engine_source(
+                    f"[ASR] ASR 引擎加载成功（GPU 回退）：本地外置模型 {os.path.normpath(resolved)}\n"
+                    f"      推理: CPU（GPU 回退）")
+            except Exception as e2:
+                tracelog.error(f"[ASR] ASR 引擎加载失败: {e2}")
+                _recognizer_local.rec = False
+                _recognizer_local.rec_key = key
+        else:
+            tracelog.error(f"[ASR] ASR 引擎加载失败: {e}")
+            _recognizer_local.rec = False
+            _recognizer_local.rec_key = key
     return _recognizer_local.rec if _recognizer_local.rec is not False else None
 
 
@@ -246,10 +483,11 @@ def _decode_with_ffmpeg(audio_path: str):
     fd, tmp = tempfile.mkstemp(dir=cache_dir(), suffix=".wav")
     os.close(fd)
     try:
+        _flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         r = subprocess.run(
             [ffmpeg, "-y", "-loglevel", "error", "-i", audio_path,
              "-ar", str(SAMPLE_RATE), "-ac", "1", "-f", "wav", tmp],
-            capture_output=True, timeout=600)
+            capture_output=True, timeout=600, creationflags=_flags)
         if r.returncode != 0 or not os.path.getsize(tmp):
             os.unlink(tmp)
             return None
@@ -380,10 +618,14 @@ def _load_samples(audio_path: str):
                 pass
 
 
-def _segment_ranges(n: int) -> list:
-    """把 n 个采样点切成 (start, end) 段列表（段长 30s、步进 29s，末段不足 1s 跳过）。"""
-    chunk_len = int(CHUNK_SECONDS * SAMPLE_RATE)
-    hop = int((CHUNK_SECONDS - CHUNK_OVERLAP_SECONDS) * SAMPLE_RATE)
+def _segment_ranges(n: int, seg_seconds: float = CHUNK_SECONDS) -> list:
+    """把 n 个采样点切成 (start, end) 段列表（段长 seg_seconds、步进 段长-1s，末段不足 1s 跳过）。
+
+    seg_seconds 可调：CPU / GPU 流水线可各自用不同切分块大小
+    （GPU 推理快，用大块段可减少调度开销；段长不影响识别内容）。
+    """
+    chunk_len = int(seg_seconds * SAMPLE_RATE)
+    hop = int((seg_seconds - CHUNK_OVERLAP_SECONDS) * SAMPLE_RATE)
     ranges = []
     start = 0
     while start < n:
@@ -395,14 +637,14 @@ def _segment_ranges(n: int) -> list:
     return ranges
 
 
-def transcribe(audio_path: str, model_dir: str = "") -> str:
+def transcribe(audio_path: str, model_dir: str = "", provider: str = "cpu") -> str:
     """转写单个音频/视频文件，返回文字；失败返回空串并记日志。
 
     长音频按 CHUNK_SECONDS 分段识别后拼接（段间重叠 CHUNK_OVERLAP_SECONDS），
     避免 SenseVoice attention 矩阵随时间平方爆炸（OOM / 空结果）。
     单文件内部串行分段——批量场景请用 transcribe_parallel_segments（段级并行）。
     """
-    recognizer = get_recognizer(model_dir)
+    recognizer = get_recognizer(model_dir, provider)
     if recognizer is None:
         return ""
     try:
@@ -451,7 +693,7 @@ def scan_asr_files(folder: str, formats, recursive: bool = True) -> list:
 
 
 def write_asr_txt(audio_file: str, text: str, out_dir: str = None) -> str:
-    """为单个音频/视频文件生成 <文件名>_语音转写.txt（纯文本，适配性最好）。
+    """为单个音频/视频文件生成 <源文件名>.txt（纯文本，适配性最好）。
 
     out_dir: 指定输出目录（汇总输出用）；None/空 = 写在源文件同目录。
     内容为纯转写文字（无 Markdown 符号、无元信息头），任何编辑器/AI 直接可读。
@@ -462,7 +704,7 @@ def write_asr_txt(audio_file: str, text: str, out_dir: str = None) -> str:
     folder = out_dir or os.path.dirname(audio_file)
     os.makedirs(folder, exist_ok=True)
     base = os.path.splitext(os.path.basename(audio_file))[0]
-    txt_name = f"{base}_语音转写.txt"
+    txt_name = f"{base}.txt"
     txt_path = os.path.join(folder, txt_name)
     try:
         with open(txt_path, "w", encoding="utf-8") as f:
@@ -482,14 +724,14 @@ def _merge_file_sents(sents: list) -> str:
 
 
 def is_transcribed(audio_file: str, out_dir: str = None) -> bool:
-    """时间标签识别：输出 <名>_语音转写.txt 存在且修改时间 >= 源文件 → 已转写。
+    """时间标签识别：输出 <源文件名>.txt 存在且修改时间 >= 源文件 → 已转写。
 
     用于未完成重传：批量转写前扫描，跳过已完成的文件（软件重启/打断后
     也能准确识别哪些已完成）。
     """
     folder = out_dir or os.path.dirname(audio_file)
     base = os.path.splitext(os.path.basename(audio_file))[0]
-    txt = os.path.join(folder, f"{base}_语音转写.txt")
+    txt = os.path.join(folder, f"{base}.txt")
     if not os.path.isfile(txt):
         return False
     try:
@@ -500,109 +742,224 @@ def is_transcribed(audio_file: str, out_dir: str = None) -> bool:
 
 def transcribe_parallel_segments(files, max_workers: int = 4, model_dir: str = "",
                                  on_file_done=None, on_segment_done=None,
-                                 cancel_event=None) -> dict:
-    """文件级串行（开火车）+ 文件内段级并行转写。
+                                 cancel_event=None,
+                                 cpu_workers: int = None, gpu_workers: int = None,
+                                 cpu_model_dir: str = None, gpu_model_dir: str = None,
+                                 cpu_seg_sec: float = CHUNK_SECONDS,
+                                 gpu_seg_sec: float = CHUNK_SECONDS * 2) -> dict:
+    """双流水线并行转写：源头文件池 → CPU / GPU 两条独立队列。
 
-    - **一次只解码一个文件**：内存只驻留当前文件音频，多文件不会同时
-      打开/转码（修复大批量时多个 ffmpeg 子进程并发 → 系统 dll/内存耗尽报错）；
-    - **当前文件的全部段并行识别**：用满 max_workers，段任务共享同一份
-      samples（numpy 切片视图不复制），单文件 3 万段也只需一份音频内存；
-    - **完成一个文件立即聚合输出、释放内存，再处理下一个**（开火车，
-      文件间不交错）；中途失败只影响失败文件，已完成文件照常输出；
-    - **线程池贯穿全部文件**：模型实例按线程只加载一次（sherpa 加载
-      开销大，避免每个文件重新加载）。
+    架构（三队列）：
+    - **源头队列**：全部待转写文件，作为分流的源头；
+    - **CPU 队列 / GPU 队列**：各自独立的一条流水线（互不等待），
+      每条流水线 = 本队列段 worker 池 + 预解码线程；
+    - **每条流水线的节奏**：初始化从源头拿 2 个任务（当前 + 预解码都解码好），
+      识别当前文件期间后台预解码下一个；当前文件跑完 → 从源头再拿一个接上，
+      **始终有一个任务在预解码**；
+    - **CPU / GPU 队列并行**：各看自己手头的任务，完成一个就从源头拿下一个，
+      不等待对方；区别只是段切分块大小（cpu_seg_sec / gpu_seg_sec，GPU 用大块）。
 
     回调语义（与旧版兼容）：
-    - on_segment_done(f, seg_done, seg_total)：seg_done 为跨文件全局自增段数；
-      seg_total 为截至当前文件的累计段数（处理过程中递增，非常量）；
+    - on_segment_done(f, seg_done, seg_total)：seg_done 为跨队列全局自增段数；
+      seg_total 为已提交段总数（两队列合计，处理中递增）；
     - on_file_done(f, text)：每完成一个文件立即回调一次（文件进度/输出用）。
-    cancel_event：threading.Event；置位时停止提交新段/新文件并取消未开始的段，
+    cancel_event：threading.Event；置位时停止拿新文件/提交新段并取消未开始的段，
     已完成的文件照常触发 on_file_done（打断后已识别内容不丢）。
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed, CancelledError
+    import queue as _queue
     results = {f: "" for f in files}
-    if not files or max_workers < 1:
+    # 推理负载归一化：cpu_workers/gpu_workers 显式指定时按双池分配；
+    # 均未指定时保持旧行为（全部走 CPU，池大小 = max_workers）。
+    if cpu_workers is None and gpu_workers is None:
+        cpu_workers = max_workers
+        gpu_workers = 0
+    cpu_workers = max(0, int(cpu_workers or 0))
+    gpu_workers = max(0, int(gpu_workers or 0))
+    # GPU 不可用时把 GPU 并发并入 CPU（避免回退后只剩 GPU 路数、比纯 CPU 更慢），
+    # 且只告警一次（否则每个 GPU worker 线程各自失败告警刷屏）
+    if gpu_workers > 0 and not _cuda_usable():
+        tracelog.warn(f"[ASR] GPU 不可用，GPU 并发 {gpu_workers} 并入 CPU（总 {cpu_workers + gpu_workers} 路）")
+        cpu_workers += gpu_workers
+        gpu_workers = 0
+    if cpu_workers + gpu_workers < 1:
+        cpu_workers = max(1, max_workers)
+        gpu_workers = 0
+    if not files:
         return results
 
-    def recognize_seg(samples, start, end):
-        rec = get_recognizer(model_dir)  # 每线程独立实例，线程池复用 → 每线程只加载一次
-        if rec is None:
-            return "", []
-        punc = get_punctuator(model_dir)
-        try:
-            return _transcribe_one(rec, samples[start:end], start / SAMPLE_RATE,
-                                   (end - start) / SAMPLE_RATE, punc)
-        except Exception as e:
-            tracelog.error(f"[ASR] 分段识别失败: {e}")
-            return "", []
-
+    workers = []   # 常驻 worker 池（循环外定义，finally 收尾用）
     try:
-        # 线程池贯穿所有文件：线程与模型实例复用，避免每文件重新加载模型
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            g_done = [0]        # 全局已完成段数（跨文件自增）
-            done_segs_sum = 0   # 已完整处理完的文件的段数之和
-            for f in files:
-                if cancel_event and cancel_event.is_set():
-                    break
-                # ① 串行解码当前文件（同时只有一个 ffmpeg 转码，控制内存与句柄）
-                try:
-                    data = _load_samples(f)
-                except Exception as e:
-                    tracelog.error(f"[ASR] 解码失败 {os.path.basename(f)}: {e}")
-                    data = None
-                if not data:
-                    results[f] = ""
-                    continue
-                samples, via = data
-                if len(samples) == 0:
-                    results[f] = ""
-                    continue
-                ranges = _segment_ranges(len(samples))
-                seg_total_file = len(ranges)
+        import threading as _th
+        import time as _time
 
-                # ② 当前文件全部段并行识别
-                seg_futs = {}
-                for start, end in ranges:
+        # ---------- 三队列架构：源头文件池 + CPU/GPU 两条独立流水线 ----------
+        source_q = _queue.Queue()      # ① 源头队列（分流来源）
+        for _f in files:
+            source_q.put(_f)
+        g_done = [0]            # 全局已完成段数（两条流水线共享自增）
+        submitted_segs = [0]    # 已提交段总数（两流水线合计，段进度总数）
+        state_lock = _th.Lock()
+        sents_all = {}          # f -> 该文件已识别句列表（跨流水线锁保护）
+        file_seg_done = {}      # f -> 该文件已完成段数
+
+        def _make_pipeline(provider: str, n_workers: int, seg_sec: float, prov_model_dir: str):
+            """构建一条流水线（CPU 或 GPU）：解码池 + 段 worker 池 + 文件循环。
+
+            解码并行化：每流水线常驻 PD_N(=min(2,worker数)) 个解码线程，从源头
+            连续取文件解码进有界队列（decoded_q，防积压占内存），推理端只等
+            "已解码好"的文件——解码不再阻塞推理，多文件批量时解码瓶颈减半。
+            两条流水线完全独立并行，各看自己手头任务，互不等待。
+            """
+            seg_q = _queue.Queue()          # ②③ 该队列自己的段任务队列
+
+            def _seg_worker():
+                mdir = prov_model_dir or model_dir
+                rec = get_recognizer(mdir, provider)  # 线程本地缓存 → 每线程只加载一次
+                punc = get_punctuator(model_dir)
+                while True:
+                    item = seg_q.get()
+                    if item is None:        # 哨兵：结束线程
+                        return
                     if cancel_event and cancel_event.is_set():
-                        break
-                    fut = pool.submit(recognize_seg, samples, start, end)
-                    seg_futs[fut] = start
-                seg_done = [0]
-                file_sents = []
-                for fut in as_completed(seg_futs):
-                    if cancel_event and cancel_event.is_set():
-                        for f2 in list(seg_futs):
-                            if not f2.done():
-                                f2.cancel()
-                        break
+                        continue            # 取消：丢弃未开始的段
+                    f, samples, start, end, seg_total = item
                     try:
-                        t, sents = fut.result()
-                    except CancelledError:
-                        break
-                    except Exception:
+                        t, sents = _transcribe_one(rec, samples[start:end],
+                                                   start / SAMPLE_RATE,
+                                                   (end - start) / SAMPLE_RATE, punc)
+                    except Exception as e:
+                        tracelog.error(f"[ASR] 分段识别失败: {e}")
                         t, sents = "", []
-                    if sents:
-                        file_sents.extend(sents)
-                    seg_done[0] += 1
-                    g_done[0] += 1
-                    # 段落级进度日志（全局自增；总数为 已完成文件段和 + 当前文件段数）
-                    tracelog.info(f"[ASR] 段 {g_done[0]}/{done_segs_sum + seg_total_file} "
-                                  f"（{os.path.basename(f)} {seg_done[0]}/{seg_total_file}）")
+                    with state_lock:
+                        sents_all.setdefault(f, []).extend(sents)
+                        file_seg_done[f] = file_seg_done.get(f, 0) + 1
+                        g_done[0] += 1
+                        total_now = submitted_segs[0]
+                        seg_done_f = file_seg_done[f]
+                    # 段落级进度日志（全局自增；总数为两流水线已提交段之和）
+                    tracelog.info(f"[ASR] 段 {g_done[0]}/{total_now} "
+                                  f"（{os.path.basename(f)} {seg_done_f}/{seg_total}）")
                     if on_segment_done:
                         try:
-                            on_segment_done(f, g_done[0], done_segs_sum + seg_total_file)
+                            on_segment_done(f, g_done[0], total_now)
                         except Exception:
                             pass
-                # ③ 当前文件全部段结束（含取消中断）→ 聚合输出，释放内存
-                if seg_done[0] >= seg_total_file:
-                    results[f] = _merge_file_sents(file_sents)
-                    if on_file_done:
+
+            workers = [_th.Thread(target=_seg_worker, daemon=True)
+                       for _ in range(max(1, n_workers))]
+
+            # 解码池：常驻 PD_N 个线程从源头连续解码，结果进有界队列。
+            # maxsize=PD_N：解码快于推理时自动限流，避免积压多文件采样占内存。
+            PD_N = max(1, min(2, n_workers))
+            decoded_q = _queue.Queue(maxsize=PD_N)
+
+            def _decoder():
+                try:
+                    while True:
+                        if cancel_event and cancel_event.is_set():
+                            return
                         try:
-                            on_file_done(f, results[f])
-                        except Exception:
-                            pass
-                done_segs_sum += seg_total_file
-                del samples, data  # 释放当前文件音频，进入下一个文件
+                            f = source_q.get(timeout=0.2)
+                        except _queue.Empty:
+                            return          # 源头已空：本解码线程退出
+                        try:
+                            d = _load_samples(f)
+                        except Exception as e:
+                            tracelog.error(f"[ASR] 解码失败 {os.path.basename(f)}: {e}")
+                            d = None
+                        decoded_q.put((f, d))   # 解码完成 → 推理端消费
+                finally:
+                    decoded_q.put((None, None))  # 哨兵：本解码线程结束
+
+            decoders = [_th.Thread(target=_decoder, daemon=True)
+                        for _ in range(PD_N)]
+            for t in decoders:
+                t.start()
+
+            def _pipeline():
+                for w in workers:
+                    w.start()
+                try:
+                    sentinels = 0
+                    while True:
+                        if cancel_event and cancel_event.is_set():
+                            break
+                        f_cur, data_cur = decoded_q.get()
+                        if f_cur is None:      # 解码线程哨兵
+                            sentinels += 1
+                            if sentinels >= PD_N:
+                                break
+                            continue
+                        if data_cur is None or len(data_cur) == 0:
+                            results[f_cur] = ""
+                            continue          # 解码失败/空音频：跳过该文件
+                        samples, via = data_cur
+                        ranges = _segment_ranges(len(samples), seg_sec)
+                        seg_total_file = len(ranges)
+                        with state_lock:
+                            submitted_segs[0] += seg_total_file
+                            sents_all[f_cur] = []
+                            file_seg_done[f_cur] = 0
+
+                        # 当前文件段全部入本队列段队列
+                        for start, end in ranges:
+                            if cancel_event and cancel_event.is_set():
+                                break
+                            seg_q.put((f_cur, samples, start, end, seg_total_file))
+                        # 等待当前文件全部段完成（取消则不等待，未完成文件不输出）
+                        while file_seg_done.get(f_cur, 0) < seg_total_file:
+                            if cancel_event and cancel_event.is_set():
+                                break
+                            _time.sleep(0.05)
+
+                        # 聚合输出 + 释放内存
+                        if file_seg_done.get(f_cur, 0) >= seg_total_file:
+                            results[f_cur] = _merge_file_sents(sents_all.get(f_cur, []))
+                            if on_file_done:
+                                try:
+                                    on_file_done(f_cur, results[f_cur])
+                                except Exception:
+                                    pass
+                        with state_lock:
+                            sents_all.pop(f_cur, None)
+                            file_seg_done.pop(f_cur, None)
+                        del samples, data_cur
+                finally:
+                    # 收尾：丢弃未开始段，放哨兵让 worker 退出
+                    while True:
+                        try:
+                            seg_q.get_nowait()
+                        except _queue.Empty:
+                            break
+                    for _ in workers:
+                        seg_q.put(None)
+                    for w in workers:
+                        w.join()
+                    # 丢弃解码队列残留（解码好的文件采样），退出解码线程
+                    while True:
+                        try:
+                            decoded_q.get_nowait()
+                        except _queue.Empty:
+                            break
+                    for t in decoders:
+                        t.join()
+
+            return _pipeline
+
+        # 启动 CPU / GPU 两条流水线（各自独立并行，互不等待）
+        pipelines = []
+        if cpu_workers > 0:
+            pipelines.append(_th.Thread(
+                target=_make_pipeline("cpu", cpu_workers, cpu_seg_sec, cpu_model_dir),
+                daemon=True))
+        if gpu_workers > 0:
+            pipelines.append(_th.Thread(
+                target=_make_pipeline("cuda", gpu_workers, gpu_seg_sec, gpu_model_dir),
+                daemon=True))
+        for p in pipelines:
+            p.start()
+        for p in pipelines:
+            p.join()
     except Exception as e:
         tracelog.error(f"[ASR] 批量转写出错: {e}")
     return results
