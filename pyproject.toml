@@ -1,6 +1,6 @@
 [project]
 name = "ScreenRecorder"
-version = "2.2.0"
+version = "3.0.0"
 description = "多功能屏幕录制器，支持视频录制、散图录制和PDF输出"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -45,20 +45,20 @@ files = [
     "ui/pages/pdf_page.py",
     "ui/pages/ocr_page.py",
     "ui/pages/asr_page.py",
-    "asr.py",
-    "ocr.py",
-    "folder_ocr.py",
-    "export_worker.py",
-    "capture.py",
-    "audio_capture.py",
-    "audio_sessions.py",
-    "region_selector.py",
-    "global_hotkey.py",
-    "shortcut_manager.py",
-    "settings_manager.py",
-    "paths.py",
-    "tracelog.py",
-    "sound_feedback.py",
+    "recognition/asr.py",
+    "recognition/ocr.py",
+    "recognition/folder_ocr.py",
+    "recognition/export_worker.py",
+    "capture/capture.py",
+    "capture/audio_capture.py",
+    "capture/audio_sessions.py",
+    "capture/region_selector.py",
+    "system/global_hotkey.py",
+    "system/shortcut_manager.py",
+    "system/settings_manager.py",
+    "system/paths.py",
+    "system/tracelog.py",
+    "system/sound_feedback.py",
     "legacy/mainwindow.py",
     "legacy/ui_form.py",
     "legacy/form.ui",

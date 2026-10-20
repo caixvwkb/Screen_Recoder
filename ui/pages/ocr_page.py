@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import tracelog
+import system.tracelog as tracelog
 import os
 """ScreenRecorder 2.2 OCR 识别页控制器（页面构建 + 页面业务逻辑）。
 
@@ -16,7 +16,7 @@ from qfluentwidgets import (FluentIcon, PushButton, PrimaryPushButton,
                             SwitchButton, ComboBox, LineEdit, BodyLabel,
                             CaptionLabel, HorizontalSeparator)
 from ui.widgets import TwoRowCard
-from export_worker import FolderOcrWorker
+from recognition.export_worker import FolderOcrWorker
 
 
 class OcrPageMixin(object):
@@ -189,7 +189,7 @@ class OcrPageMixin(object):
                 self._show_tip("警告", "请先选择有效文件夹！")
                 return False
 
-            from folder_ocr import scan_folder, is_ocred
+            from recognition.folder_ocr import scan_folder, is_ocred
             files = scan_folder(
                 folder,
                 recursive=self.ocr_recursive_switch.isChecked(),

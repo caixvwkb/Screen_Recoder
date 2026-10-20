@@ -70,7 +70,7 @@ def _ensure_file() -> str:
         return _fallback_file()
     _initializing = True
     try:
-        from paths import cache_dir
+        from system.paths import cache_dir
         _log_file = os.path.join(cache_dir(), "trace.log")
     except Exception:
         _log_file = _fallback_file()

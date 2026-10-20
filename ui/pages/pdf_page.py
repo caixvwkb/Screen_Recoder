@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import tracelog
+import system.tracelog as tracelog
 import os
 from datetime import datetime
 """ScreenRecorder 2.2 PDF 输出页控制器（页面构建 + 页面业务逻辑）。
@@ -16,9 +16,9 @@ from qfluentwidgets import (FluentIcon, PushButton, PrimaryPushButton,
                             SwitchButton, ComboBox, LineEdit, BodyLabel,
                             CaptionLabel, HorizontalSeparator)
 from ui.widgets import TwoRowCard
-from capture import PDFExporter
-from export_worker import PDFExportWorker
-from region_selector import SelectionWindow
+from capture.capture import PDFExporter
+from recognition.export_worker import PDFExportWorker
+from capture.region_selector import SelectionWindow
 
 
 class PdfPageMixin(object):
@@ -237,7 +237,7 @@ class PdfPageMixin(object):
         """PDF 临时目录：放缓存区（源码=项目根 cache，打包版=exe 同级 cache），
         不在输出目录创建；PDFExporter 为内存模式（帧不落盘），此目录仅作占位/兼容，
         导出完成或取消时由 cleanup() 删除。"""
-        from paths import cache_dir
+        from system.paths import cache_dir
         cache = cache_dir()
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         folder = os.path.join(cache, f"pdf_temp_{timestamp}")
@@ -280,7 +280,7 @@ class PdfPageMixin(object):
             if not self.pdf_region and not self.pdf_window_hwnd:
                 self._show_tip("请先选择截图区域", "点击「全屏页面」/「框选页面」，或「选择窗口」")
                 return False
-            from capture import is_window_valid
+            from capture.capture import is_window_valid
             if self.pdf_window_hwnd and not is_window_valid(self.pdf_window_hwnd):
                 self._show_tip("所选窗口已关闭", "请重新选择应用窗口")
                 return False
@@ -340,7 +340,7 @@ class PdfPageMixin(object):
             if not self.pdf_region and not self.pdf_window_hwnd:
                 self._show_tip("请先选择截图区域", "点击「全屏页面」/「框选页面」，或「选择窗口」")
                 return False
-            from capture import is_window_valid
+            from capture.capture import is_window_valid
             if self.pdf_window_hwnd and not is_window_valid(self.pdf_window_hwnd):
                 self._show_tip("所选窗口已关闭", "请重新选择应用窗口")
                 return False
@@ -405,7 +405,7 @@ class PdfPageMixin(object):
             if not self.pdf_region and not self.pdf_window_hwnd:
                 self._show_tip("请先选择截图区域", "点击「全屏页面」/「框选页面」，或「选择窗口」")
                 return False
-            from capture import is_window_valid
+            from capture.capture import is_window_valid
             if self.pdf_window_hwnd and not is_window_valid(self.pdf_window_hwnd):
                 self._show_tip("所选窗口已关闭", "请重新选择应用窗口")
                 return False
@@ -552,7 +552,7 @@ class PdfPageMixin(object):
     def _pick_pdf_window(self):
         """选择要捕获的应用窗口（PrintWindow 抓取，被遮挡也取真实内容）。"""
         from ui.widgets import WindowPickerDialog
-        from capture import is_window_valid
+        from capture.capture import is_window_valid
         res = WindowPickerDialog.pick(self)
         if not res:
             return False

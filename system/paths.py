@@ -9,7 +9,7 @@
 import os
 import sys
 
-from tracelog import info, debug, warn
+from system.tracelog import info, debug, warn
 
 
 def is_compiled() -> bool:
@@ -28,11 +28,28 @@ _last_logged_candidates = None
 _last_logged_root = None
 
 
+def _source_root() -> str:
+    """源码运行的项目根：从本文件所在目录（system/）向上找含 pyproject.toml 的目录。
+
+    重构后 paths.py 位于 system/ 包内，__file__ 目录不再是程序根；
+    打包环境不经过此函数（走 sys.executable 分支）。
+    """
+    d = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        if os.path.exists(os.path.join(d, "pyproject.toml")) or os.path.exists(os.path.join(d, "mainwindow_fluent.py")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def app_base_candidates() -> list:
     """候选程序根目录列表（多来源兜底，避免单一路径判断在打包环境出错）。
 
     - 编译环境：sys.executable 所在目录（exe 同级，多文件模式程序根）
-    - 源码运行 / 编译环境：本文件 __file__ 所在目录
+    - 源码运行：项目根（_source_root()，含 pyproject.toml 的特征目录）
     - 各自父级（兼容 models 放在上级目录的布局）
     自动过滤含 .exe 后缀的伪路径（Nuitka 编译模块 __file__ 可能为伪路径）。
     """
@@ -40,7 +57,7 @@ def app_base_candidates() -> list:
     dirs = []
     if is_compiled() and sys.executable:
         dirs.append(os.path.dirname(sys.executable))
-    dirs.append(os.path.dirname(os.path.abspath(__file__)))
+    dirs.append(_source_root() if not is_compiled() else os.path.dirname(os.path.abspath(__file__)))
     out = []
     for d in dirs:
         d = os.path.normpath(d)
@@ -59,12 +76,12 @@ def app_base_candidates() -> list:
 
 
 def app_root() -> str:
-    """程序根目录：打包后=exe 同级；源码运行=项目根。"""
+    """程序根目录：打包后=exe 同级；源码运行=项目根（system/ 上级的特征目录）。"""
     global _last_logged_root
     if is_compiled():
         root = os.path.dirname(sys.executable)
     else:
-        root = os.path.dirname(os.path.abspath(__file__))
+        root = _source_root()
     if root != _last_logged_root:
         _last_logged_root = root
         info(f"[路径] 程序根: {root}（{'编译环境，exe 同级' if is_compiled() else '源码运行，项目根'}）")

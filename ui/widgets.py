@@ -285,7 +285,7 @@ class WindowPickerDialog(QDialog):
         self._refresh()
 
     def _refresh(self):
-        from capture import enum_visible_windows
+        from capture.capture import enum_visible_windows
         self.list_widget.clear()
         self._items = []
         try:

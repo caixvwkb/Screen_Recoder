@@ -12,7 +12,7 @@
 import os
 import sys
 import threading
-import tracelog
+import system.tracelog as tracelog
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -114,7 +114,7 @@ def resolve_model_dir(explicit_dir: str = "") -> str:
     if explicit_dir and models_complete(explicit_dir):
         return explicit_dir
     # 自动探测：多候选根（exe 同级 / 项目根 / 各自父级），兼容 Nuitka/PyInstaller
-    from paths import app_base_candidates
+    from system.paths import app_base_candidates
     candidates = []
     for root in app_base_candidates():
         candidates.append(os.path.join(root, "models", "ocr"))  # 分用途目录（新结构）

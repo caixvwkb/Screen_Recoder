@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ScreenRecorder UI 重构版（2.4.0）：基于 PySide6-Fluent-Widgets 的 Fluent 风格界面。
+"""ScreenRecorder UI 重构版（3.0.0）：基于 PySide6-Fluent-Widgets 的 Fluent 风格界面。
 
 重构原则（见 需求和开发记录文档.md · UI 重构选型）：
 - 功能逻辑不动：ocr.py / asr.py / export_worker.py / capture.py / folder_ocr.py 全保留，
@@ -12,7 +12,7 @@
 
 当前进度：主界面框架 + 设置页全局选项，功能页逐页迁移中。
 """
-import tracelog
+import system.tracelog as tracelog
 import os
 import sys
 
@@ -59,19 +59,20 @@ from qfluentwidgets.components.settings.setting_card import SettingIconWidget
 
 from datetime import datetime
 
-from settings_manager import SettingsManager
-from shortcut_manager import ShortcutManager, ShortcutEditDialog
-from capture import ScreenRecorder, ImageCapture, PDFExporter
-from region_selector import SelectionWindow
-from global_hotkey import GlobalHotkeyManager
-from export_worker import SidecarWorker, PDFExportWorker
+from system.settings_manager import SettingsManager
+from system.shortcut_manager import ShortcutManager, ShortcutEditDialog
+from capture.capture import ScreenRecorder, ImageCapture, PDFExporter
+from capture.region_selector import SelectionWindow
+from system.global_hotkey import GlobalHotkeyManager
+from recognition.export_worker import SidecarWorker, PDFExportWorker
 from ui.widgets import FeaturePage, TwoRowCard, DirPickerCard, OutFolderCard
 from ui.pages.video_page import VideoPageMixin
 from ui.pages.image_page import ImagePageMixin
 from ui.pages.pdf_page import PdfPageMixin
 from ui.pages.ocr_page import OcrPageMixin
 from ui.pages.asr_page import AsrPageMixin
-import sound_feedback
+from workstation.ui.ai_page import AiPageMixin
+import system.sound_feedback as sound_feedback
 
 APP_THEME_COLOR = "#0078D4"  # Windows 11 蓝
 DEFAULT_SHORTCUTS = ShortcutManager.DEFAULT_SHORTCUTS
@@ -104,8 +105,13 @@ PAGE_DEFS = [
         (FluentIcon.SETTING, "识别设置", "并发与处理格式", None),
         (FluentIcon.PLAY, "识别控制", "批量转写与进度", None),
     ]),
+    ("AI 工作站", FluentIcon.ROBOT, "服务器 AI 对话 · 研究库检索", [
+        (FluentIcon.SETTING, "模型配置", "API 端点 / 密钥 / 模型", None),
+        (FluentIcon.SEARCH, "文件清单", "项目文件摘要索引 · 一键写入上下文", None),
+        (FluentIcon.APPLICATION, "工具箱", "向上下文写入内容（文件/剪贴板/角色设定）", None),
+        (FluentIcon.CHAT, "对话", "流式问答", None),
+    ]),
 ]
-
 # 快捷键动作 → 各功能页对应方法（蓝色高亮页 = 快捷键目标页，通用语意按当前页路由）
 _PAGE_ACTION_MAP = {
     "video": {
@@ -481,7 +487,7 @@ class SettingsPage(QWidget):
         ocr_items = []
         if os.path.isdir(ocr_root):
             try:
-                from ocr import list_ocr_models
+                from recognition.ocr import list_ocr_models
                 ocr_items = list_ocr_models(ocr_root)
             except Exception:
                 ocr_items = []
@@ -492,7 +498,7 @@ class SettingsPage(QWidget):
         asr_items = []
         if os.path.isdir(asr_root):
             try:
-                from asr import list_asr_models
+                from recognition.asr import list_asr_models
                 asr_items = list_asr_models(asr_root)
             except Exception:
                 asr_items = []
@@ -510,18 +516,18 @@ class SettingsPage(QWidget):
 
 
 class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
-                 OcrPageMixin, AsrPageMixin, FluentWindow):
-    """ScreenRecorder 2.4.0 主窗口（Fluent 风格）。"""
+                 OcrPageMixin, AsrPageMixin, AiPageMixin, FluentWindow):
+    """ScreenRecorder 3.0.0 主窗口（Fluent 风格）。"""
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ScreenRecorder 2.4.0")
+        self.setWindowTitle("ScreenRecorder 3.0.0")
         # 录屏软件窗口不宜过大（避免录制时遮挡画面）：默认约 720×640
         self.resize(720, 640)
         self.setMinimumSize(600, 480)
 
         # 绿色化数据目录：随程序走（打包后=exe 同级；源码运行=项目根）
-        from paths import app_root, cache_dir, default_output_dir, settings_file
+        from system.paths import app_root, cache_dir, default_output_dir, settings_file
         self.app_data_dir = app_root()
         self.cache_dir = cache_dir()
         self.output_dir = default_output_dir()
@@ -568,30 +574,6 @@ class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
         self.navigationInterface.panel.installEventFilter(self)
         # 首帧布局完全激活后再同步一次折叠块展开高度（showEvent 时可能仍有卡未布局）
         QTimer.singleShot(80, self._sync_all_expand_heights)
-        # 启动空闲期后台预热 OCR 引擎池：把"首次点识别的等待"前移到启动后台，
-        # 预热失败只记日志、不影响启动（懒构建页面先跑，预热延时错开）
-        QTimer.singleShot(2500, self._prewarm_ocr)
-
-    def _prewarm_ocr(self):
-        """后台预热 OCR 引擎池（常驻，首次识别秒开）。
-
-        放到独立后台线程执行：get_ocr_pool 会等全部引擎加载完才返回，
-        高并发数下加载耗时数秒，放 UI 线程会短暂冻结界面。
-        """
-        import threading
-
-        def _run():
-            try:
-                from ocr import get_ocr_pool
-                settings = self.settings_manager.load() if hasattr(self, "settings_manager") else {}
-                workers = int(settings.get("ocr_concurrency", 0)) or min(4, max(1, (os.cpu_count() or 4) // 2))
-                workers = max(1, min(16, workers))
-                get_ocr_pool(workers)
-                tracelog.info(f"[OCR] 后台预热完成：{workers} 个引擎常驻")
-            except Exception as e:
-                tracelog.error(f"[OCR] 后台预热失败（不影响使用，首次识别时再加载）: {e}")
-
-        threading.Thread(target=_run, daemon=True).start()
 
 
     def _migrate_legacy_settings(self):
@@ -604,7 +586,7 @@ class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
         （exe 同级），迁移会把源码开发期的测试路径/选项带进分发版本，造成
         "打包版设置和开发版一样"的困惑；迁移仅服务于源码开发环境。
         """
-        from paths import is_compiled, settings_file
+        from system.paths import is_compiled, settings_file
         if is_compiled():
             return
         target = settings_file()
@@ -643,6 +625,7 @@ class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
             "PDF 输出": self._build_pdf_page,
             "OCR 识别": self._build_ocr_page,
             "ASR 识别": self._build_asr_page,
+            "AI 工作站": self._build_ai_page,
         }
         for title, icon, subtitle, blocks in PAGE_DEFS:
             page = FeaturePage(title, subtitle, blocks)
@@ -778,7 +761,7 @@ class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
         model_dir = self._ocr_model_path("cpu")
         if model_dir:
             try:
-                from ocr import models_complete
+                from recognition.ocr import models_complete
                 return models_complete(model_dir)
             except Exception:
                 return False
@@ -789,13 +772,13 @@ class MainWindow(VideoPageMixin, ImagePageMixin, PdfPageMixin,
         model_dir = self._asr_model_path("cpu")
         if model_dir:
             try:
-                from asr import models_complete
+                from recognition.asr import models_complete
                 return models_complete(model_dir)
             except Exception:
                 return False
         # 未显式指定 → 真实探测自动候选（exe 同级 / 项目根 models/asr），失败即不可用
         try:
-            from asr import resolve_model_dir
+            from recognition.asr import resolve_model_dir
             return resolve_model_dir("") is not None
         except Exception:
             return False
@@ -1243,7 +1226,7 @@ QProgressBar::chunk {{
                 continue
             # 纯 Ctrl+字母/数字 等系统通用组合（全选/保存/打印/切标签）
             # 不注册全局——只保留应用内快捷键，避免抢走其它程序的系统功能
-            from global_hotkey import is_global_safe
+            from system.global_hotkey import is_global_safe
             if not is_global_safe(key):
                 tracelog.info(
                     f"[热键] {_ACTION_NAMES.get(name, name)} → {key}（系统通用组合，"
@@ -1541,7 +1524,7 @@ QProgressBar::chunk {{
         head.addWidget(icon)
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
-        title = BodyLabel("ScreenRecorder 2.4.0", dlg)
+        title = BodyLabel("ScreenRecorder 3.0.0", dlg)
         title.setStyleSheet("font-size: 18px; font-weight: 600;")
         title_box.addWidget(title)
         sub = CaptionLabel("屏幕录制 · 截图 · OCR/ASR 文字识别", dlg)
@@ -1609,7 +1592,7 @@ def _asr_worker_main():
     files = cfg.get("files") or []
     total = len(files)
     done = txt_count = fail_count = 0
-    import tracelog
+    import system.tracelog as tracelog
 
     def on_segment_done(f, seg_done, seg_total):
         print(json.dumps({"t": "seg", "name": os.path.basename(f),
@@ -1620,7 +1603,7 @@ def _asr_worker_main():
         nonlocal done, txt_count, fail_count
         done += 1
         try:
-            from asr import write_asr_txt
+            from recognition.asr import write_asr_txt
             txt = write_asr_txt(f, text, cfg.get("out_dir") or None)
             if txt:
                 txt_count += 1
@@ -1633,7 +1616,7 @@ def _asr_worker_main():
                           "done": done, "total": total}, ensure_ascii=False), flush=True)
 
     try:
-        from asr import transcribe_parallel_segments
+        from recognition.asr import transcribe_parallel_segments
         transcribe_parallel_segments(
             files, max_workers=cfg.get("max_workers", 4),
             model_dir=cfg.get("model_dir", ""),
@@ -1665,7 +1648,7 @@ def main():
     # 避免全屏应用切换等场景下的偶发异常把整个软件带崩
     def _excepthook(etype, value, tb):
         try:
-            import tracelog
+            import system.tracelog as tracelog
             tracelog.error("[守护] 未捕获异常: " + "".join(_tb.format_exception(etype, value, tb)))
         except Exception:
             _tb.print_exception(etype, value, tb)

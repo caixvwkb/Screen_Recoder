@@ -8,7 +8,7 @@
   - 视频录制(ScreenRecorder) 跑在独立后台线程，而 Qt 的截图 API 不允许在
     非 GUI 线程调用，因此继续使用 mss（线程安全）。这是二者后端不同的原因。
 """
-import tracelog
+import system.tracelog as tracelog
 import ctypes
 import os
 import threading
@@ -348,7 +348,7 @@ class ScreenRecorder(QObject):
             need_mux = bool(self.audio_sources)
             video_target = self.output_file
             if need_mux:
-                from paths import cache_dir
+                from system.paths import cache_dir
                 video_target = os.path.join(
                     cache_dir(), f"_tmp_audio_{os.getpid()}_{int(time.time())}.mp4")
 
@@ -375,7 +375,7 @@ class ScreenRecorder(QObject):
             # 音频采集（与视频并行）
             audio_rec = None
             if need_mux:
-                from audio_capture import AudioRecorder
+                from capture.audio_capture import AudioRecorder
                 audio_rec = AudioRecorder(self.audio_sources)
                 audio_rec.start()
 
@@ -543,7 +543,7 @@ class ScreenRecorder(QObject):
                     tracelog.info(
                         f"[录制] 实际帧率 {actual_fps:.1f}fps，"
                         f"视频时长对齐真实时间（避免播放加速）")
-                    from audio_capture import fix_video_fps
+                    from capture.audio_capture import fix_video_fps
                     fix_video_fps(video_target, self.fps / actual_fps)
 
             # 音频合成：写 wav → ffmpeg mux 到最终文件
@@ -575,7 +575,7 @@ class ScreenRecorder(QObject):
                         os.path.dirname(video_target),
                         f"_tmp_audio_{os.getpid()}_{int(time.time())}.wav")
                     try:
-                        from audio_capture import write_wav, mux_video_audio
+                        from capture.audio_capture import write_wav, mux_video_audio
                         if write_wav(samples, sr, wav_tmp):
                             if mux_video_audio(video_target, wav_tmp, self.output_file):
                                 tracelog.info(f"[录制] 音视频合成完成: {self.output_file}")
@@ -608,7 +608,7 @@ class ScreenRecorder(QObject):
 
     def _record_audio_only(self):
         """MP3 纯音频录制：只采集音频，lameenc 编码输出。"""
-        from audio_capture import AudioRecorder, encode_mp3
+        from capture.audio_capture import AudioRecorder, encode_mp3
         output_dir = os.path.dirname(self.output_file)
         os.makedirs(output_dir, exist_ok=True)
         rec = AudioRecorder(self.audio_sources)
@@ -767,7 +767,7 @@ class PDFExporter(QObject):
             # 预先并行识别所有页文字（OCR 并行，直接识别内存帧，无中间文件）
             ocr_texts = {}
             if ocr_enabled:
-                from ocr import ocr_images_ndarray_parallel
+                from recognition.ocr import ocr_images_ndarray_parallel
                 ocr_texts = ocr_images_ndarray_parallel(
                     self.captured_frames, max_workers=ocr_max_workers,
                     model_dir=ocr_model_dir)
@@ -848,7 +848,7 @@ class PDFExporter(QObject):
             # 生成配套说明.md（AI 可直接读取文本）
             if ocr_enabled:
                 try:
-                    from ocr import write_sidecar_md
+                    from recognition.ocr import write_sidecar_md
                     side_dir = os.path.dirname(self.output_pdf)
                     side_name = os.path.splitext(os.path.basename(self.output_pdf))[0] + "_说明.md"
                     side_path = write_sidecar_md(side_dir, ocr_items, md_name=side_name)

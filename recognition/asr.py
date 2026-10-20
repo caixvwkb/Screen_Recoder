@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-import tracelog
+import system.tracelog as tracelog
 from datetime import datetime
 
 import numpy as np
@@ -108,7 +108,7 @@ def resolve_model_dir(explicit_dir: str = "") -> str:
     if explicit_dir and models_complete(explicit_dir):
         return explicit_dir
     # 自动探测：多候选根（exe 同级 / 项目根 / 各自父级），兼容 Nuitka/PyInstaller
-    from paths import app_base_candidates
+    from system.paths import app_base_candidates
     candidates = []
     for root in app_base_candidates():
         candidates.append(os.path.join(root, "models", "asr"))
@@ -147,7 +147,7 @@ def _ensure_cuda_dlls() -> bool:
                         dirs.append(d)
         # 打包运行：exe 同级的 nvidia 目录（分发时随包携带即可免装 CUDA）
         try:
-            from paths import app_base_candidates
+            from system.paths import app_base_candidates
             for root in app_base_candidates():
                 base = os.path.join(root, "nvidia")
                 if os.path.isdir(base):
@@ -221,7 +221,7 @@ def list_asr_models(root_dir: str = "") -> list:
     model.int8.onnx 判断）。返回 [{name, path, label}]；name 为
     config.json 的 name（显示名），label 为子目录名（"" = 根默认）。
     """
-    from paths import app_base_candidates
+    from system.paths import app_base_candidates
     root = (root_dir or "").strip()
     if not root:
         root = resolve_model_dir("")
@@ -479,7 +479,7 @@ def _decode_with_ffmpeg(audio_path: str):
         ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     except Exception:
         return None
-    from paths import cache_dir
+    from system.paths import cache_dir
     fd, tmp = tempfile.mkstemp(dir=cache_dir(), suffix=".wav")
     os.close(fd)
     try:

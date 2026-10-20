@@ -9,7 +9,7 @@
                图片再 OCR。fitz 未安装时 PDF 跳过（图片仍可用）。
 本模块不含任何 Qt / 界面代码，纯逻辑，可独立测试。
 """
-import tracelog
+import system.tracelog as tracelog
 import os
 import shutil
 import tempfile
@@ -60,11 +60,11 @@ def ocr_pdf(pdf_path: str, progress_cb=None, model_dir: str = "") -> str:
             tracelog.warn(f"[文件夹OCR] 未安装 PyMuPDF，跳过 PDF: {os.path.basename(pdf_path)}")
             return ""
     try:
-        from ocr import ocr_image
+        from recognition.ocr import ocr_image
         doc = fitz.open(pdf_path)
         total = doc.page_count
         pages = []
-        from paths import cache_dir
+        from system.paths import cache_dir
         tmp = tempfile.mkdtemp(prefix="sr_pdfocr_", dir=cache_dir())
         try:
             for i, page in enumerate(doc):
@@ -96,7 +96,7 @@ def ocr_any_file(file_path: str, progress_cb=None, model_dir: str = "") -> str:
     ext = os.path.splitext(file_path)[1].lower()
     if ext == ".pdf":
         return ocr_pdf(file_path, progress_cb, model_dir)
-    from ocr import ocr_image
+    from recognition.ocr import ocr_image
     return ocr_image(file_path, model_dir)
 
 
@@ -114,7 +114,7 @@ def ocr_files_parallel(files, max_workers=4, progress_cb=None, model_dir="",
                   （按文件为单位即时输出，不等全部完成）。
     """
     from concurrent.futures import as_completed, CancelledError
-    from ocr import get_ocr_pool
+    from recognition.ocr import get_ocr_pool
     results = {}
     files = list(files)
     total = len(files)

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import tracelog
+import system.tracelog as tracelog
 import os
 from datetime import datetime
 """ScreenRecorder 2.2 散图录制页控制器（页面构建 + 页面业务逻辑）。
@@ -16,10 +16,10 @@ from qfluentwidgets import (FluentIcon, PushButton, PrimaryPushButton,
                             SwitchButton, ComboBox, LineEdit, BodyLabel,
                             CaptionLabel, HorizontalSeparator)
 from ui.widgets import TwoRowCard
-from capture import ImageCapture
-from global_hotkey import GlobalHotkeyManager
-from region_selector import SelectionWindow
-from export_worker import SidecarWorker
+from capture.capture import ImageCapture
+from system.global_hotkey import GlobalHotkeyManager
+from capture.region_selector import SelectionWindow
+from recognition.export_worker import SidecarWorker
 
 
 class ImagePageMixin(object):
@@ -302,23 +302,23 @@ class ImagePageMixin(object):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             out_path = os.path.join(base_path, f"{name}_单张_{timestamp}.{fmt}")
             x, y, w, h = self.image_region
-            from capture import grab_region
+            from capture.capture import grab_region
             pixmap = grab_region(x, y, w, h)
             if pixmap is None or pixmap.isNull():
                 self._show_tip("截图失败", "无法获取屏幕区域")
-                import sound_feedback
+                import system.sound_feedback as sound_feedback
                 sound_feedback.play_fail()
                 self.show()
                 return
             if not pixmap.save(out_path):
                 self._show_tip("保存失败", out_path)
-                import sound_feedback
+                import system.sound_feedback as sound_feedback
                 sound_feedback.play_fail()
                 self.show()
                 return
             self.show()  # 画面已抓取，恢复主窗口
             self.setFocus()  # 焦点归还主窗口（一次性截图后 Enter 仍可继续截图）
-            import sound_feedback
+            import system.sound_feedback as sound_feedback
             sound_feedback.play_ok()  # 真正截取成功 → ok 音
             self.image_status_label.setText(
                 f"状态: 已截取单张 -> {os.path.basename(out_path)}")
@@ -337,7 +337,7 @@ class ImagePageMixin(object):
         """一次性截图的附带 OCR：单文件单核识别，生成同名 .md（异步，不阻塞）。"""
         def run():
             try:
-                from ocr import ocr_image, write_sidecar_md
+                from recognition.ocr import ocr_image, write_sidecar_md
                 text = ocr_image(image_path, self._ocr_model_dir())
                 md_name = os.path.splitext(os.path.basename(image_path))[0] + ".md"
                 md = write_sidecar_md(
@@ -419,7 +419,7 @@ class ImagePageMixin(object):
             if not self.image_region and not self.image_window_hwnd:
                 self._show_tip("请先选择截图区域", "点击「全屏截图」/「框选范围」，或「选择窗口」")
                 return False
-            from capture import is_window_valid
+            from capture.capture import is_window_valid
             if self.image_window_hwnd and not is_window_valid(self.image_window_hwnd):
                 self._show_tip("所选窗口已关闭", "请重新选择应用窗口")
                 return False
@@ -475,7 +475,7 @@ class ImagePageMixin(object):
             if not self.image_region and not self.image_window_hwnd:
                 self._show_tip("请先选择截图区域", "点击「全屏截图」/「框选范围」，或「选择窗口」")
                 return False
-            from capture import is_window_valid
+            from capture.capture import is_window_valid
             if self.image_window_hwnd and not is_window_valid(self.image_window_hwnd):
                 self._show_tip("所选窗口已关闭", "请重新选择应用窗口")
                 return False
@@ -665,7 +665,7 @@ class ImagePageMixin(object):
     def _pick_image_window(self):
         """选择要捕获的应用窗口（PrintWindow 抓取，被遮挡也取真实内容）。"""
         from ui.widgets import WindowPickerDialog
-        from capture import is_window_valid
+        from capture.capture import is_window_valid
         res = WindowPickerDialog.pick(self)
         if not res:
             return False

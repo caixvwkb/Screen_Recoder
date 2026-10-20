@@ -5,7 +5,7 @@
 %AppData%/ScreenRecorder/settings.json，并在下次启动时读回。
 本模块只做「读写文件 + 返回字典」，不接触任何界面控件。
 """
-import tracelog
+import system.tracelog as tracelog
 import json
 import os
 

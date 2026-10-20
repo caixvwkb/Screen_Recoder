@@ -7,7 +7,7 @@ MainWindow 通过多继承装配各 Mixin；跨页公共能力（模型检查 / 
 """
 import json
 import os
-import tracelog
+import system.tracelog as tracelog
 from datetime import datetime
 from PySide6.QtCore import Qt, QTimer, QUrl, QPropertyAnimation, QEasingCurve
 from PySide6.QtWidgets import (QApplication, QHBoxLayout, QWidget, QFileDialog,
@@ -17,8 +17,8 @@ from qfluentwidgets import (FluentIcon, PushButton, PrimaryPushButton,
                             SwitchButton, ComboBox, LineEdit, BodyLabel,
                             CaptionLabel, HorizontalSeparator)
 from ui.widgets import TwoRowCard
-from capture import ScreenRecorder
-from region_selector import SelectionWindow
+from capture.capture import ScreenRecorder
+from capture.region_selector import SelectionWindow
 
 
 class VideoPageMixin(object):
@@ -316,7 +316,7 @@ class VideoPageMixin(object):
 
     def _enumerate_audio_devices(self):
         """枚举音频来源；返回 {'loopback': [...], 'mic': [...]}，失败为空结构。"""
-        from audio_capture import list_audio_sources
+        from capture.audio_capture import list_audio_sources
         return list_audio_sources()
 
     def _fill_audio_combo(self, combo, kind: str):
@@ -338,7 +338,7 @@ class VideoPageMixin(object):
         data 为 JSON：{"pid":…, "proc":进程名, "dev":输出设备名}；
         录制时按设备名匹配 soundcard loopback（get_microphone 支持按名匹配）。
         """
-        from audio_sessions import list_active_sessions
+        from capture.audio_sessions import list_active_sessions
         sessions = list_active_sessions()
         cur = self.video_loopback_combo.currentData()
         self.video_loopback_combo.blockSignals(True)
@@ -426,7 +426,7 @@ class VideoPageMixin(object):
             return True
 
     def _start_video_recording(self):
-        from capture import is_window_valid
+        from capture.capture import is_window_valid
         fmt = self._current_video_format()
         is_mp3 = (fmt == "mp3")
         if not is_mp3 and not self.video_region and not self.video_window_hwnd:
@@ -438,7 +438,7 @@ class VideoPageMixin(object):
         if self.video_window_hwnd:
             # 预检：PrintWindow 取不到内容的窗口（独占全屏/硬件加速渲染）直接提示，
             # 避免"开始录制"后才因抓帧失败中断；并给「改用全屏录制」一键折中入口
-            from capture import capture_window_by_hwnd_np
+            from capture.capture import capture_window_by_hwnd_np
             if capture_window_by_hwnd_np(self.video_window_hwnd) is None:
                 self._show_window_capture_fallback()
                 return False
@@ -550,7 +550,7 @@ class VideoPageMixin(object):
     def _pick_video_window(self):
         """选择要捕获的应用窗口（PrintWindow 抓取，被遮挡也取真实内容）。"""
         from ui.widgets import WindowPickerDialog
-        from capture import is_window_valid
+        from capture.capture import is_window_valid
         res = WindowPickerDialog.pick(self)
         if not res:
             return False

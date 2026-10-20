@@ -12,8 +12,8 @@ import os
 import threading
 import winsound
 
-import paths
-import tracelog
+from system import paths
+import system.tracelog as tracelog
 
 _global_enabled = True
 

@@ -7,7 +7,7 @@
   - 所以这里用 Python threading.Thread + Qt 信号即可：重活在线程里跑，
     进度/结果通过信号回到主线程更新 UI，主线程不卡顿。
 """
-import tracelog
+import system.tracelog as tracelog
 import os
 import sys
 import threading
@@ -90,7 +90,7 @@ class SidecarWorker(QObject):
 
     def _run(self):
         try:
-            from ocr import ocr_images_parallel, write_sidecar_md
+            from recognition.ocr import ocr_images_parallel, write_sidecar_md
             results = ocr_images_parallel(
                 self._files,
                 max_workers=self._max_workers,
@@ -143,7 +143,7 @@ class FolderOcrWorker(QObject):
     def _run(self):
         # 按文件为单位即时输出：每文件识别完成立即写 md（merge 图片收齐后合并），
         # 停止（cancel_event）只影响未开始文件，已完成文件不丢。
-        from folder_ocr import (IMAGE_EXTS, ocr_files_parallel, write_file_sidecar,
+        from recognition.folder_ocr import (IMAGE_EXTS, ocr_files_parallel, write_file_sidecar,
                                 write_merged_image_md)
         total = len(self._files)
         md_count, fail_count, done = [0], [0], [0]

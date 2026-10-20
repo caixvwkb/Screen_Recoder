@@ -9,7 +9,7 @@
 from PySide6.QtCore import Qt, QObject, Signal
 from PySide6.QtWidgets import QPlainTextEdit, QVBoxLayout, QWidget
 
-import tracelog
+import system.tracelog as tracelog
 
 _DARK_QSS = (
     "QPlainTextEdit{background:#1b1b1b;color:#d4d4d4;"

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import tracelog
+import system.tracelog as tracelog
 import os
 """ScreenRecorder 2.2 ASR 识别页控制器（页面构建 + 页面业务逻辑）。
 
@@ -16,7 +16,7 @@ from qfluentwidgets import (FluentIcon, PushButton, PrimaryPushButton,
                             SwitchButton, ComboBox, LineEdit, BodyLabel,
                             CaptionLabel, HorizontalSeparator)
 from ui.widgets import TwoRowCard
-from export_worker import ASRWorker
+from recognition.export_worker import ASRWorker
 
 
 class AsrPageMixin(object):
@@ -141,7 +141,7 @@ class AsrPageMixin(object):
         _gpu_max = 8
         _gpu_default = 2
         try:
-            import asr as _asr
+            import recognition.asr as _asr
             _gi = _asr.get_gpu_info()
             if _gi:
                 # 理论上限 = 总显存 ÷ 单实例约 0.7GB（int8，实测 8GB 卡 8 实例可并发）
@@ -161,7 +161,7 @@ class AsrPageMixin(object):
         self._apply_num_qss(self.asr_gpu_spin)
         self._gpu_reco_label = BodyLabel("")
         try:
-            import asr as _asr
+            import recognition.asr as _asr
             _gi = _asr.get_gpu_info()
             _rec = _asr.suggest_gpu_workers()
             if _gi:
@@ -282,7 +282,7 @@ class AsrPageMixin(object):
                 self._show_tip("警告", "请填写要处理的格式（如 wav,mp3,mp4）！")
                 return False
 
-            from asr import scan_asr_files, is_transcribed
+            from recognition.asr import scan_asr_files, is_transcribed
             files = scan_asr_files(folder, formats, recursive=self.asr_recursive_switch.isChecked())
             if not files:
                 self._show_tip("提示", "该文件夹内没有可处理的音频/视频文件。")
@@ -321,7 +321,7 @@ class AsrPageMixin(object):
             # 避免只剩 GPU 路数、比纯 CPU 更慢；探测有模块级缓存，只探测一次）
             if gpu_workers > 0:
                 try:
-                    from asr import _cuda_usable
+                    from recognition.asr import _cuda_usable
                     if not _cuda_usable(self._asr_model_path("gpu")):
                         cpu_workers = max(cpu_w, gpu_w)
                         gpu_workers = 0
@@ -390,7 +390,7 @@ class AsrPageMixin(object):
         self._show_tip("错误", f"ASR 转写出错: {msg}")
     def _populate_asr_list(self, files, pending, out_dir):
         """填充任务清单：已完成（时间标签识别）灰绿标注，待处理默认色。"""
-        from asr import is_transcribed
+        from recognition.asr import is_transcribed
         pending_names = {os.path.basename(f) for f in pending}
         self.asr_file_list.clear()
         self._asr_list_items = {}

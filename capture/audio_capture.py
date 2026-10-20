@@ -13,7 +13,7 @@
 import os
 import threading
 import time
-import tracelog
+import system.tracelog as tracelog
 
 import numpy as np
 

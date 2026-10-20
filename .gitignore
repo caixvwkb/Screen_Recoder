@@ -209,3 +209,14 @@ Recordings/
 models/
 # 运行生成的个人配置（快捷键等，随机器不同）
 settings.json
+
+# ===== AI 工作站（v3.0.0） =====
+# 会话工作目录（context.md 本地存档，用户私有）
+ai_workspace/
+# AI 虚拟环境
+.venv_ai/
+# AI 配置（含 api_key，绝对不入库）
+workstation/config.json
+# 测试残留
+test_*.txt
+fish_*.txt

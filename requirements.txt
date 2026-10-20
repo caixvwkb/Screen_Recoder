@@ -6,3 +6,5 @@ Pillow>=10.0.0
 reportlab>=4.0.0
 # OCR（AI 友好输出：识别截图文字，未安装时自动降级不识别）
 rapidocr-onnxruntime>=1.4.0
+# AI 工作站（服务器 API 对话）
+openai>=1.0.0
